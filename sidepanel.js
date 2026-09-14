@@ -178,6 +178,8 @@ function renderCategory(cat, depth) {
     <span class="cat-name">${highlight(cat.name)}</span>
     <span class="cat-count">${countLinks(cat)}</span>
     <div class="cat-actions">
+      <button data-action="cat-top" title="移到当前层级最前">⤒</button>
+      <button data-action="cat-bottom" title="移到当前层级最后">⤓</button>
       <button data-action="add-link" title="添加链接">＋</button>
       <button data-action="add-subcat" title="新建子分类">⧉</button>
       <button data-action="rename-cat" title="重命名">✎</button>
@@ -234,6 +236,19 @@ function openModal({ title, bodyHtml, onOk, onOpen }) {
 function closeModal() { $("#modalMask").classList.add("hidden"); }
 
 /* ---------------- 分类操作 ---------------- */
+// 把分类移到当前所在层级的最前(top)/最后(bottom)，层级不变
+function moveCatToEdge(found, edge) {
+  const { node, parentList } = found;
+  const idx = parentList.indexOf(node);
+  if (idx === -1) return;
+  if (edge === "top" && idx === 0) return;
+  if (edge === "bottom" && idx === parentList.length - 1) return;
+  parentList.splice(idx, 1);
+  if (edge === "top") parentList.unshift(node);
+  else parentList.push(node);
+  save().then(render);
+}
+
 function addCategory(parent) {
   openModal({
     title: parent ? `在「${parent.name}」下新建子分类` : "新建分类",
@@ -975,6 +990,8 @@ function bindEvents() {
       case "add-subcat": addCategory(cat); break;
       case "rename-cat": renameCategory(cat); break;
       case "del-cat": deleteCategory(cat); break;
+      case "cat-top": moveCatToEdge(found, "top"); break;
+      case "cat-bottom": moveCatToEdge(found, "bottom"); break;
       case "edit-link": {
         const link = cat.links.find((l) => l.id === e.target.closest(".link-row")?.dataset.linkId);
         if (link) editLink(cat, link);
