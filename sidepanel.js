@@ -13,7 +13,10 @@ const DEFAULT_SETTINGS = {
   aiKey: "",               // 用户自己的 API Key（仅存本地）
   aiModel: "",             // 自定义模型名，留空用默认
   aiMaxItems: 250,         // AI 整理单次处理的链接上限
-  lastCategoryId: ""       // 「☆ 当前页」上次选择的分类
+  lastCategoryId: "",      // 「☆ 当前页」上次选择的分类
+  panelMode: "native",     // 面板形态：native=原生侧栏长期固定 / float=悬浮自动隐藏
+  hoverDelaySec: 1,        // 悬浮模式：鼠标在屏幕右缘停留多少秒后唤出
+  maxIndentDepth: 4        // 缩进封顶层级：超过该深度后不再继续右缩，靠层级色条/导线区分
 };
 
 // 路线 A：用户自带 API Key，直连大模型，无后端
@@ -42,11 +45,20 @@ const hostOf = (url) => {
 };
 
 /* ---------------- 树操作 ---------------- */
+// 层级色条调色板：按深度循环，让不同层级一眼可辨（缩进封顶后主要靠它区分层级）
+const DEPTH_COLORS = ["#2563eb", "#16a34a", "#ea580c", "#9333ea", "#db2777", "#0891b2"];
+const depthColor = (depth) => DEPTH_COLORS[depth % DEPTH_COLORS.length];
+
 function newCategory(name, collapsed) {
   return { id: uid(), name, collapsed, links: [], children: [] };
 }
 
-// 在树中查找节点，返回 { node, parentList }；parentList 为 null 表示是顶层
+// 链接也是树：{ id, title, url, children[] }，children 里是子链接
+function newLink(title, url) {
+  return { id: uid(), title, url, children: [] };
+}
+
+// 在分类树中查找分类节点，返回 { node, parentList }
 function findNode(id, list = state.categories, parentList = null) {
   for (const n of list) {
     if (n.id === id) return { node: n, parentList: parentList || list };
@@ -56,15 +68,71 @@ function findNode(id, list = state.categories, parentList = null) {
   return null;
 }
 
-// id 是否位于 root 的子树中（含 root 自身）
+// 在全部链接树（含子链接）中查找链接，返回 { link, parentList, cat }
+function findLink(id) {
+  const inLinks = (links, cat) => {
+    for (const l of links) {
+      if (l.id === id) return { link: l, parentList: links, cat };
+      const r = inLinks(l.children || [], cat);
+      if (r) return r;
+    }
+    return null;
+  };
+  const walk = (cats) => {
+    for (const c of cats) {
+      const r = inLinks(c.links, c);
+      if (r) return r;
+      const r2 = walk(c.children);
+      if (r2) return r2;
+    }
+    return null;
+  };
+  return walk(state.categories);
+}
+
+// 按 URL 找链接（AI 整理用），返回 { link, parentList, cat }
+function findLinkByUrl(url) {
+  const inLinks = (links, cat) => {
+    for (const l of links) {
+      if (l.url === url) return { link: l, parentList: links, cat };
+      const r = inLinks(l.children || [], cat);
+      if (r) return r;
+    }
+    return null;
+  };
+  const walk = (cats) => {
+    for (const c of cats) {
+      const r = inLinks(c.links, c);
+      if (r) return r;
+      const r2 = walk(c.children);
+      if (r2) return r2;
+    }
+    return null;
+  };
+  return walk(state.categories);
+}
+
+// id 是否位于分类 root 的子树中（含 root 自身）
 function inSubtree(root, id) {
   if (root.id === id) return true;
   return root.children.some((c) => inSubtree(c, id));
 }
 
-// 统计子树中链接总数（递归）
+// id 是否位于链接 root 的子链接树中（含 root 自身）
+function inLinkSubtree(root, id) {
+  if (root.id === id) return true;
+  return (root.children || []).some((c) => inLinkSubtree(c, id));
+}
+
+// 统计链接树的链接数（含子链接，递归）
+function countLinkTree(link) {
+  return 1 + (link.children || []).reduce((s, c) => s + countLinkTree(c), 0);
+}
+
+// 统计分类子树中链接总数（含子链接，递归）
 function countLinks(node) {
-  return node.links.length + node.children.reduce((s, c) => s + countLinks(c), 0);
+  const own = node.links.reduce((s, l) => s + countLinkTree(l), 0);
+  return own + node.children.reduce((s, c) => s + countLinks(c), 0);
 }
 
 // 统计子树中分类总数（递归）
@@ -72,12 +140,20 @@ function countCategories(node) {
   return node.children.reduce((s, c) => s + 1 + countCategories(c), 0);
 }
 
-// 数据迁移：旧版数据没有 children 字段，补齐
+// 数据迁移：旧版数据没有 children 字段，补齐（分类与链接都补）
 function migrate(list) {
   for (const n of list) {
     if (!Array.isArray(n.children)) n.children = [];
     if (!Array.isArray(n.links)) n.links = [];
+    migrateLinks(n.links);
     migrate(n.children);
+  }
+}
+
+function migrateLinks(links) {
+  for (const l of links) {
+    if (!Array.isArray(l.children)) l.children = [];
+    migrateLinks(l.children);
   }
 }
 
@@ -111,6 +187,9 @@ function applySettingsToUI() {
   $("#setAiModel").value = s.aiModel;
   $("#setAiModel").placeholder = "默认：" + AI_PROVIDERS[s.aiProvider].model;
   $("#setAiMaxItems").value = s.aiMaxItems;
+  $("#setPanelMode").value = s.panelMode;
+  $("#setHoverDelay").value = s.hoverDelaySec;
+  $("#setMaxIndentDepth").value = s.maxIndentDepth;
 }
 
 /* ---------------- 搜索过滤 ---------------- */
@@ -122,6 +201,18 @@ function highlight(text) {
   return esc.replace(new RegExp(q, "gi"), (m) => `<mark>${m}</mark>`);
 }
 
+// 递归过滤链接树：自身命中 → 保留整棵子链接；子孙命中 → 保留祖先链
+function filterLinks(links, q) {
+  const out = [];
+  for (const l of links) {
+    const self = l.title.toLowerCase().includes(q) || l.url.toLowerCase().includes(q);
+    if (self) { out.push(l); continue; }
+    const kids = filterLinks(l.children || [], q);
+    if (kids.length > 0) out.push({ ...l, children: kids, collapsed: false });
+  }
+  return out;
+}
+
 // 递归过滤：分类名命中 → 保留整棵；否则按链接标题/网址过滤并下钻子分类
 function filterTree(list, q) {
   const out = [];
@@ -130,8 +221,7 @@ function filterTree(list, q) {
       out.push({ ...cat, collapsed: false });
       continue;
     }
-    const links = cat.links.filter((l) =>
-      l.title.toLowerCase().includes(q) || l.url.toLowerCase().includes(q));
+    const links = filterLinks(cat.links, q);
     const children = filterTree(cat.children, q);
     if (links.length > 0 || children.length > 0) {
       out.push({ ...cat, links, children, collapsed: false });
@@ -159,21 +249,29 @@ function render() {
     emptyEl.classList.add("hidden");
   }
 
-  display.forEach((cat) => list.appendChild(renderCategory(cat, 0)));
+  display.forEach((cat) => list.appendChild(renderCategory(cat, 0, cat.name)));
 }
 
-function renderCategory(cat, depth) {
+// 缩进封顶：超过 maxIndentDepth 后不再继续右缩，防止深层级标题被顶出可视区
+function effDepth(depth) {
+  return Math.min(depth, state.settings.maxIndentDepth ?? 4);
+}
+
+function renderCategory(cat, depth, path) {
   const el = document.createElement("div");
-  el.className = "category" + (cat.collapsed ? " collapsed" : "");
+  el.className = "category" + (cat.collapsed ? " collapsed" : "") + (depth > 0 ? " is-sub" : " is-root");
   el.dataset.id = cat.id;
   el.dataset.depth = depth;
 
+  const d = effDepth(depth);
   const header = document.createElement("div");
   header.className = "cat-header";
   header.dataset.action = "toggle-cat";
   header.draggable = true;
-  header.style.paddingLeft = `calc(8px + ${depth} * var(--indent))`;
+  header.style.paddingLeft = `calc(8px + ${d} * var(--indent))`;
+  header.title = path; // 完整路径 tooltip，标题被省略时也能看到层级
   header.innerHTML = `
+    <span class="depth-bar" style="background:${depthColor(depth)}"></span>
     <span class="cat-arrow">▼</span>
     <span class="cat-name">${highlight(cat.name)}</span>
     <span class="cat-count">${countLinks(cat)}</span>
@@ -190,30 +288,55 @@ function renderCategory(cat, depth) {
 
   const body = document.createElement("div");
   body.className = "cat-body";
+  // 树导线：子内容左侧一条竖线，对齐到父级箭头位置，直观表达从属关系
+  body.style.setProperty("--guide-x", `calc(8px + ${d} * var(--indent) + 7px)`);
 
-  cat.links.forEach((link) => {
-    const row = document.createElement("div");
-    row.className = "link-row";
-    row.dataset.linkId = link.id;
-    row.draggable = true;
-    row.style.paddingLeft = `calc(8px + ${depth + 1} * var(--indent))`;
-    row.innerHTML = `
-      <span class="drag-handle">⠿</span>
-      <img class="favicon" src="${faviconUrl(link.url)}" onerror="this.style.visibility='hidden'" />
-      <a href="${escapeHtml(link.url)}" title="${escapeHtml(link.url)}"
-         ${state.settings.openInNewTab ? 'target="_blank" rel="noopener"' : ""}>${highlight(link.title)}</a>
-      <div class="link-actions">
-        <button data-action="edit-link" title="编辑">✎</button>
-        <button data-action="del-link" class="danger" title="删除">✕</button>
-      </div>
-    `;
-    body.appendChild(row);
-  });
+  cat.links.forEach((link) => renderLink(link, d + 1, 0, body, path));
 
-  cat.children.forEach((child) => body.appendChild(renderCategory(child, depth + 1)));
+  cat.children.forEach((child) =>
+    body.appendChild(renderCategory(child, depth + 1, path + " / " + child.name)));
 
   el.appendChild(body);
   return el;
+}
+
+// 渲染链接行及其子链接（递归）。level = 缩进层级；linkDepth = 链接嵌套深度
+function renderLink(link, level, linkDepth, container, path) {
+  const hasKids = (link.children || []).length > 0;
+  const wrap = document.createElement("div");
+  wrap.className = "link-node" + (link.collapsed ? " collapsed" : "");
+
+  const row = document.createElement("div");
+  row.className = "link-row";
+  row.dataset.linkId = link.id;
+  row.draggable = true;
+  row.style.paddingLeft = `calc(8px + ${level} * var(--indent))`;
+  row.innerHTML = `
+    ${hasKids
+      ? `<span class="link-arrow" data-action="toggle-link" title="展开/折叠子链接">▼</span>`
+      : `<span class="link-arrow-spacer"></span>`}
+    <span class="drag-handle">⠿</span>
+    <img class="favicon" src="${faviconUrl(link.url)}" onerror="this.style.visibility='hidden'" />
+    <a href="${escapeHtml(link.url)}" title="${escapeHtml(link.title)}&#10;${escapeHtml(link.url)}"
+       ${state.settings.openInNewTab ? 'target="_blank" rel="noopener"' : ""}>${highlight(link.title)}</a>
+    ${hasKids ? `<span class="cat-count">${countLinkTree(link) - 1}</span>` : ""}
+    <div class="link-actions">
+      <button data-action="add-sublink" title="添加子链接">＋</button>
+      <button data-action="edit-link" title="编辑">✎</button>
+      <button data-action="del-link" class="danger" title="删除（含子链接）">✕</button>
+    </div>
+  `;
+  wrap.appendChild(row);
+
+  if (hasKids) {
+    const sub = document.createElement("div");
+    sub.className = "sublinks";
+    sub.style.setProperty("--guide-x", `calc(8px + ${level} * var(--indent) + 7px)`);
+    link.children.forEach((kid) => renderLink(kid, level + 1, linkDepth + 1, sub, path));
+    wrap.appendChild(sub);
+  }
+
+  container.appendChild(wrap);
 }
 
 /* ---------------- 弹窗 ---------------- */
@@ -353,7 +476,27 @@ function addLink(cat, preset) {
         alert("标题和网址都要填写，面板里只认标题。");
         return false;
       }
-      cat.links.push({ id: uid(), ...data });
+      cat.links.push(newLink(data.title, data.url));
+      await save();
+      render();
+    }
+  });
+}
+
+// 在某个链接下添加子链接（链接也是树，可无限嵌套）
+function addSubLink(parentLink) {
+  openModal({
+    title: `在「${parentLink.title}」下添加子链接`,
+    bodyHtml: linkFormHtml(),
+    onOpen: attachTabTitleAutofill,
+    onOk: async (body) => {
+      const data = readLinkForm(body);
+      if (!data) {
+        alert("标题和网址都要填写，面板里只认标题。");
+        return false;
+      }
+      parentLink.children.push(newLink(data.title, data.url));
+      parentLink.collapsed = false; // 展开父链接让新子链接可见
       await save();
       render();
     }
@@ -426,7 +569,7 @@ async function addCurrentPage() {
         alert("该分类下已收藏过这个网址。");
         return false;
       }
-      found.node.links.push({ id: uid(), ...data });
+      found.node.links.push(newLink(data.title, data.url));
       state.settings.lastCategoryId = found.node.id; // 记住本次选择
       await save();
       render();
@@ -484,13 +627,19 @@ async function callAI(userPrompt) {
   return p.type === "openai" ? data.choices[0].message.content : data.content[0].text;
 }
 
-// 收集全部链接及其当前分类路径
+// 收集全部链接及其当前分类路径（含子链接，子链接随父链接一起参与整理）
 function collectItems() {
   const items = [];
+  const collectLinks = (links, path) => {
+    for (const l of links) {
+      items.push({ title: l.title, url: l.url, current: path });
+      collectLinks(l.children || [], path);
+    }
+  };
   const walk = (list, path) => {
     for (const n of list) {
       const p = path ? path + "/" + n.name : n.name;
-      n.links.forEach((l) => items.push({ title: l.title, url: l.url, current: p }));
+      collectLinks(n.links, p);
       walk(n.children, p);
     }
   };
@@ -512,17 +661,8 @@ function resolvePath(path) {
 
 function applyAiMoves(moves) {
   for (const m of moves) {
-    // 找到链接当前所在分类
-    let found = null;
-    const walk = (list) => {
-      for (const n of list) {
-        const i = n.links.findIndex((l) => l.url === m.url);
-        if (i >= 0) { found = { cat: n, i }; return true; }
-        if (walk(n.children)) return true;
-      }
-      return false;
-    };
-    walk(state.categories);
+    // 找到链接（含子链接）当前所在位置
+    const found = findLinkByUrl(m.url);
     if (!found) continue;
 
     // 解析目标分类
@@ -540,8 +680,10 @@ function applyAiMoves(moves) {
       if (!target) continue; // 模型给了不存在的路径，跳过
     }
 
-    const [link] = found.cat.links.splice(found.i, 1);
-    target.links.push(link);
+    const i = found.parentList.indexOf(found.link);
+    if (i < 0) continue;
+    found.parentList.splice(i, 1);
+    target.links.push(found.link); // 链接连同其子链接整棵移动
     target.collapsed = false;
   }
 }
@@ -666,11 +808,15 @@ async function aiOrganize() {
 }
 
 /* ---------------- 从收藏夹导入（递归保留层级） ---------------- */
-// 收集整棵树中已存在的 URL 与标题，用于导入去重
+// 收集整棵树中已存在的 URL 与标题（含子链接），用于导入去重
 function collectExistingKeys() {
   const urls = new Set(), titles = new Set();
+  const walkLinks = (links) => links.forEach((l) => {
+    urls.add(l.url); titles.add(l.title);
+    walkLinks(l.children || []);
+  });
   const walk = (list) => list.forEach((n) => {
-    n.links.forEach((l) => { urls.add(l.url); titles.add(l.title); });
+    walkLinks(n.links);
     walk(n.children);
   });
   walk(state.categories);
@@ -681,7 +827,7 @@ function bookmarkFolderToCategory(folder, skip) {
   const cat = newCategory(folder.title || "未命名", state.settings.defaultCollapsed);
   for (const n of folder.children || []) {
     if (n.url) {
-      const link = { id: uid(), title: n.title || hostOf(n.url), url: n.url };
+      const link = newLink(n.title || hostOf(n.url), n.url);
       if (skip && skip(link)) continue;
       cat.links.push(link);
     } else if (n.children) {
@@ -727,7 +873,7 @@ function importFromBookmarks() {
       const LOOSE_NAME = "书签栏（散置链接）";
       const looseLinks = bar.children
         .filter((n) => n.url)
-        .map((n) => ({ id: uid(), title: n.title || hostOf(n.url), url: n.url }))
+        .map((n) => newLink(n.title || hostOf(n.url), n.url))
         .filter((l) => !skip(l));
       if (looseLinks.length > 0) {
         let looseCat = state.categories.find((c) => c.name === LOOSE_NAME);
@@ -756,7 +902,7 @@ function importFromBookmarks() {
 }
 
 /* ---------------- 拖拽排序 ---------------- */
-let dragCtx = null; // { kind: 'category'|'link', id, sourceCatId? }
+let dragCtx = null; // { kind: 'category'|'link', id }
 
 function clearDropHints() {
   document.querySelectorAll(".drop-before, .drop-after, .drop-into").forEach((el) =>
@@ -782,8 +928,7 @@ function bindDragEvents() {
     const row = e.target.closest(".link-row");
     const header = e.target.closest(".cat-header");
     if (row) {
-      const catEl = row.closest(".category");
-      dragCtx = { kind: "link", id: row.dataset.linkId, sourceCatId: catEl.dataset.id };
+      dragCtx = { kind: "link", id: row.dataset.linkId };
     } else if (header) {
       dragCtx = { kind: "category", id: header.parentElement.dataset.id };
     } else {
@@ -813,7 +958,10 @@ function bindDragEvents() {
       e.dataTransfer.dropEffect = "move";
     } else if (row && dragCtx.kind === "link") {
       if (row.dataset.linkId === dragCtx.id) return;
-      const zone = dropZone(e, row, false);
+      // 链接不能放进自己或自己的子孙链接
+      const src = findLink(dragCtx.id);
+      if (src && inLinkSubtree(src.link, row.dataset.linkId)) return;
+      const zone = dropZone(e, row, true); // 三段落点：前 / 成为子链接 / 后
       row.classList.add("drop-" + zone);
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
@@ -833,9 +981,9 @@ function bindDragEvents() {
     if (dragCtx.kind === "category" && header) {
       await dropCategory(dragCtx.id, header.parentElement.dataset.id, dropZone(e, header, true));
     } else if (dragCtx.kind === "link" && row) {
-      await dropLinkOnLink(dragCtx, row, dropZone(e, row, false));
+      await dropLinkOnLink(dragCtx.id, row.dataset.linkId, dropZone(e, row, true));
     } else if (dragCtx.kind === "link" && header) {
-      await dropLinkOnCategory(dragCtx, header.parentElement.dataset.id);
+      await dropLinkOnCategory(dragCtx.id, header.parentElement.dataset.id);
     }
 
     clearDropHints();
@@ -872,34 +1020,42 @@ async function dropCategory(srcId, targetId, zone) {
   await save();
 }
 
-// 链接拖到另一条链接的前/后
-async function dropLinkOnLink(ctx, row, zone) {
-  const src = findNode(ctx.sourceCatId);
-  const targetCatEl = row.closest(".category");
-  const target = findNode(targetCatEl.dataset.id);
-  if (!src || !target) return;
+// 链接拖到另一条链接的 前/后/内部（内部 = 成为它的子链接）
+async function dropLinkOnLink(srcId, targetId, zone) {
+  if (srcId === targetId) return;
+  const src = findLink(srcId);
+  if (!src) return;
+  if (inLinkSubtree(src.link, targetId)) return; // 防止拖进自己的子链接树
 
-  const li = src.node.links.findIndex((l) => l.id === ctx.id);
-  if (li < 0) return;
-  const [link] = src.node.links.splice(li, 1);
+  const si = src.parentList.findIndex((l) => l.id === srcId);
+  if (si < 0) return;
+  const [link] = src.parentList.splice(si, 1);
 
-  // 摘除后重新找目标行所在分类与索引
-  const t = findNode(target.node.id);
-  const ti = t.node.links.findIndex((l) => l.id === row.dataset.linkId);
-  t.node.links.splice(zone === "before" ? ti : ti + 1, 0, link);
+  if (zone === "into") {
+    const target = findLink(targetId);
+    if (!target) return;
+    target.link.children.push(link);
+    target.link.collapsed = false;
+  } else {
+    // 摘除后重新定位目标
+    const t = findLink(targetId);
+    if (!t) return;
+    const ti = t.parentList.findIndex((l) => l.id === targetId);
+    t.parentList.splice(zone === "before" ? ti : ti + 1, 0, link);
+  }
   await save();
 }
 
-// 链接拖到分类标题 → 移入该分类
-async function dropLinkOnCategory(ctx, targetCatId) {
-  if (ctx.sourceCatId === targetCatId) return;
-  const src = findNode(ctx.sourceCatId);
+// 链接拖到分类标题 → 移入该分类（成为其顶层链接）
+async function dropLinkOnCategory(srcId, targetCatId) {
+  const src = findLink(srcId);
   const target = findNode(targetCatId);
   if (!src || !target) return;
+  if (src.cat && src.cat.id === targetCatId && src.parentList === src.cat.links) return; // 已在该分类顶层
 
-  const li = src.node.links.findIndex((l) => l.id === ctx.id);
-  if (li < 0) return;
-  const [link] = src.node.links.splice(li, 1);
+  const si = src.parentList.findIndex((l) => l.id === srcId);
+  if (si < 0) return;
+  const [link] = src.parentList.splice(si, 1);
   target.node.links.push(link);
   target.node.collapsed = false;
   await save();
@@ -939,11 +1095,12 @@ function importBackup(file) {
       alert("备份文件格式不正确（缺少 categories 字段），恢复失败。");
       return;
     }
-    // 统计备份内容，让用户确认
+    // 统计备份内容（含子链接），让用户确认
     let linkCount = 0, catCount = 0;
+    const walkLinks = (links) => links.forEach((l) => { linkCount++; walkLinks(l.children || []); });
     const walk = (list) => list.forEach((n) => {
       catCount++;
-      linkCount += (n.links || []).length;
+      walkLinks(n.links || []);
       walk(n.children || []);
     });
     walk(data.categories);
@@ -992,15 +1149,33 @@ function bindEvents() {
       case "del-cat": deleteCategory(cat); break;
       case "cat-top": moveCatToEdge(found, "top"); break;
       case "cat-bottom": moveCatToEdge(found, "bottom"); break;
+      case "toggle-link": {
+        const hit = findLink(e.target.closest(".link-row")?.dataset.linkId);
+        if (hit) {
+          hit.link.collapsed = !hit.link.collapsed;
+          save().then(render);
+        }
+        break;
+      }
+      case "add-sublink": {
+        const hit = findLink(e.target.closest(".link-row")?.dataset.linkId);
+        if (hit) addSubLink(hit.link);
+        break;
+      }
       case "edit-link": {
-        const link = cat.links.find((l) => l.id === e.target.closest(".link-row")?.dataset.linkId);
-        if (link) editLink(cat, link);
+        const hit = findLink(e.target.closest(".link-row")?.dataset.linkId);
+        if (hit) editLink(hit.cat, hit.link);
         break;
       }
       case "del-link": {
-        const linkId = e.target.closest(".link-row")?.dataset.linkId;
-        cat.links = cat.links.filter((l) => l.id !== linkId);
-        save().then(render);
+        const hit = findLink(e.target.closest(".link-row")?.dataset.linkId);
+        if (hit) {
+          const subCount = countLinkTree(hit.link) - 1;
+          if (subCount > 0 && !confirm(`该链接下还有 ${subCount} 个子链接，将一并删除，确定吗？`)) break;
+          const i = hit.parentList.findIndex((l) => l.id === hit.link.id);
+          if (i >= 0) hit.parentList.splice(i, 1);
+          save().then(render);
+        }
         break;
       }
     }
@@ -1064,6 +1239,29 @@ function bindEvents() {
   };
   $("#setOpenInNewTab").onchange = async (e) => {
     state.settings.openInNewTab = e.target.checked;
+    await save();
+    render();
+  };
+
+  // 面板形态
+  $("#setPanelMode").onchange = async (e) => {
+    state.settings.panelMode = e.target.value;
+    await save();
+  };
+  $("#setHoverDelay").onchange = async (e) => {
+    let v = parseFloat(e.target.value);
+    if (isNaN(v)) v = 1;
+    v = Math.min(120, Math.max(0, v));
+    e.target.value = v;
+    state.settings.hoverDelaySec = v;
+    await save();
+  };
+  $("#setMaxIndentDepth").onchange = async (e) => {
+    let v = parseInt(e.target.value, 10);
+    if (isNaN(v)) v = 4;
+    v = Math.min(8, Math.max(1, v));
+    e.target.value = v;
+    state.settings.maxIndentDepth = v;
     await save();
     render();
   };

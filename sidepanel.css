@@ -185,6 +185,20 @@ mark {
 .cat-name { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cat-count { color: var(--text-dim); font-size: 11px; flex-shrink: 0; }
 
+/* 层级色条：按深度循环配色，缩进封顶后主要靠它区分上下级 */
+.depth-bar {
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* 子分类：弱化卡片感，名称稍小、稍淡，与父级形成视觉层级 */
+.category.is-sub > .cat-header { padding-top: 5px; padding-bottom: 5px; }
+.category.is-sub > .cat-header .cat-name { font-weight: 500; font-size: 12.5px; color: var(--text); }
+.category.is-sub > .cat-header { background: transparent; }
+.category.is-sub > .cat-header:hover { background: var(--accent-soft); }
+
 .cat-actions { display: none; gap: 2px; flex-shrink: 0; }
 .cat-header:hover .cat-actions { display: flex; }
 .cat-actions button {
@@ -201,6 +215,14 @@ mark {
 .cat-body { padding: 2px 0; }
 .category.collapsed .cat-body { display: none; }
 
+/* 树导线：子内容左侧一条竖线，直观表达从属关系（位置随层级对齐） */
+.cat-body,
+.sublinks {
+  border-left: 1px solid var(--border);
+  margin-left: var(--guide-x, 15px);
+}
+.category.is-root > .cat-body { border-left: none; margin-left: 0; }
+
 /* 子分类：去掉卡片感，改成分隔线，缩进由 inline padding 控制 */
 .category .category {
   border: none;
@@ -208,6 +230,21 @@ mark {
   border-radius: 0;
   margin-bottom: 0;
 }
+
+/* ---- 链接树（子链接） ---- */
+.link-node.collapsed > .sublinks { display: none; }
+
+.link-arrow {
+  width: 14px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 9px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+.link-node.collapsed > .link-row .link-arrow { transform: rotate(-90deg); }
+.link-arrow-spacer { width: 14px; flex-shrink: 0; }
 
 .link-row {
   display: flex;

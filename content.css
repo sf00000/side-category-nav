@@ -1,0 +1,48 @@
+/* 侧边分类导航 - 悬浮面板样式（注入网页，使用高优先级避免被页面样式覆盖） */
+
+/* 右缘触发条：常驻、几乎不可见 */
+#scn-edge-strip {
+  position: fixed !important;
+  top: 0 !important;
+  right: 0 !important;
+  width: 6px !important;
+  height: 100vh !important;
+  z-index: 2147483646 !important;
+  background: transparent !important;
+  cursor: default !important;
+  transition: background 0.2s !important;
+}
+
+/* 鼠标贴上去时给一点视觉反馈 */
+#scn-edge-strip:hover {
+  background: rgba(37, 99, 235, 0.25) !important;
+}
+
+#scn-edge-strip.scn-hidden {
+  display: none !important;
+}
+
+/* 悬浮面板容器：默认移出屏幕，打开时滑入 */
+#scn-float-panel {
+  position: fixed !important;
+  top: 0 !important;
+  right: 0 !important;
+  width: var(--scn-width, 340px) !important;
+  height: 100vh !important;
+  z-index: 2147483647 !important;
+  transform: translateX(105%) !important;
+  transition: transform 0.25s ease !important;
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.18) !important;
+  background: #ffffff !important;
+}
+
+#scn-float-panel.scn-open {
+  transform: translateX(0) !important;
+}
+
+#scn-float-panel iframe {
+  width: 100% !important;
+  height: 100% !important;
+  border: none !important;
+  display: block !important;
+}

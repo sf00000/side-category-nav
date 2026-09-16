@@ -8,7 +8,8 @@
 
 ### 分类与链接管理
 - 📁 **多级子分类**：树状结构，层数不限，每个分类可独立折叠/展开
-- 🔗 **链接管理**：添加（标题必填）、编辑、删除，网站图标自动显示（Chrome 内置 `_favicon` API，不依赖第三方服务）
+- 🔗 **链接也是树**：链接下可再挂子链接（链接行「＋」），递归嵌套、可折叠；添加（标题必填）、编辑、删除，网站图标自动显示（Chrome 内置 `_favicon` API，不依赖第三方服务）
+- 🌳 **层级可视化**：层级色条（深度循环配色）+ 左侧树导线 + **缩进封顶**（默认 4 层，设置中可调 1–8 层）——层级再深标题也不会被顶出可视区；悬停分类名显示完整路径
 - ⭐ **三种收藏入口**：
   - 「☆ 当前页」一键收藏正在浏览的页面（自动带标题；**记住上次选择的分类**，连续收藏同类型网页一键确认）
   - 分类上「＋」手动添加（输入网址后自动从已打开标签页匹配标题）
@@ -16,13 +17,14 @@
 
 ### 拖拽排序
 - 拖动分类标题：上 1/3 = 排到前面，**中间 = 变成它的子分类**，下 1/3 = 排到后面
-- 拖动链接：拖到链接上 = 排序，拖到分类标题上 = 移入该分类
+- 拖动链接：拖到链接上 = 排序，**拖到链接中部 = 变成它的子链接**，拖到分类标题上 = 移入该分类顶层
 - 分类悬停操作「⤒ / ⤓」：一键移到当前层级的最前/最后（层级不变）
-- 防呆：分类不能拖进自己或自己的后代
+- 防呆：分类不能拖进自己的后代；链接不能拖进自己的子孙链接
 
 ### 显示定制
 - 固定缩进开关 + 每级缩进宽度滑块（0–40px，实时生效）
 - 新建分类默认折叠、链接新标签页打开等偏好设置
+- **面板形态双模式**：「长期固定」用 Chrome 原生右侧栏；「自动隐藏」在网页右缘注入隐形触发条，鼠标停留到设定时长（0–120 秒可配）后面板滑出，移开 0.5 秒自动收起，Esc 关闭
 - 浅色/深色主题自适应
 
 ### 🔍 搜索与过滤
@@ -86,6 +88,7 @@
 | `favicon` | 显示网站图标 |
 | `tabs` | 「☆ 当前页」读取当前标签页标题/网址；手动添加时匹配标题 |
 | `host_permissions`（3 个 AI API 域名） | 扩展页直连大模型接口（MV3 跨域必需） |
+| `content_scripts`（http/https 全站点） | 「自动隐藏」模式：在网页右缘注入悬浮面板的触发条。仅在启用悬浮模式时工作，固定模式下注入脚本立即退出。**该权限会使安装时出现「读取所有网站数据」提示**；chrome:// 页面、Chrome 应用商店等页面无法注入 |
 
 ## 数据存储
 
@@ -98,12 +101,13 @@
   categories: [
     {
       id, name, collapsed,
-      links: [{ id, title, url }],
+      links: [{ id, title, url, collapsed?, children: [ /* 子链接，同结构递归 */ ] }],
       children: [ /* 子分类，同结构递归 */ ]
     }
   ],
-  settings: { indentEnabled, indentSize, defaultCollapsed, openInNewTab,
-              aiProvider, aiKey, aiModel, aiMaxItems, lastCategoryId }
+  settings: { indentEnabled, indentSize, maxIndentDepth, defaultCollapsed, openInNewTab,
+              aiProvider, aiKey, aiModel, aiMaxItems, lastCategoryId,
+              panelMode, hoverDelaySec }
 }
 ```
 
@@ -120,6 +124,8 @@ side-category-nav/
 ├── sidepanel.html     # 侧栏界面
 ├── sidepanel.css      # 样式（浅/深色自适应）
 ├── sidepanel.js       # 核心逻辑：树渲染、拖拽、导入、AI 整理
+├── content.js         # 悬浮模式：右缘触发条 + iframe 面板（自动隐藏）
+├── content.css        # 悬浮面板样式（z-index 置顶，避免页面样式污染）
 └── icons/             # 扩展图标
 ```
 

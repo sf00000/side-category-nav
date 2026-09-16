@@ -1,105 +1,126 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-page-node-id="4gInfvOJudod2jOboyjdlm">
-<head data-page-node-id="tRt2FXi7LeHvJrcXBwv5QP">
-  <meta charset="UTF-8" data-page-node-id="0QVPIfFvrMlyxAqsBAyGvU" />
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
   <title>侧边分类导航</title>
-  <link rel="stylesheet" href="sidepanel.css" data-page-node-id="R1RySGCMwj0aUzqD8Nngpx" />
+  <link rel="stylesheet" href="sidepanel.css" />
 </head>
-<body data-page-node-id="X13ZGg81Adyf78s92irYLC">
-  <div class="top-bar" data-page-node-id="fQo6V7MgLcjDTyElHzXKbU">
+<body>
+  <div class="top-bar">
   <!-- 顶部工具栏 -->
-  <header class="toolbar" data-page-node-id="Ex5erJb2Bbeuf1dgwYzufG">
-    <span class="logo" data-page-node-id="IoxunqAeQbirMu94n5pt0u"><span class="logo-icon" data-page-node-id="zif85Fa32oQzBbbsvK706q">📑</span><span class="logo-text" data-page-node-id="JkoEEWPSe6TqiLNzISWqb6">分类导航</span></span>
-    <div class="toolbar-actions" data-page-node-id="iI0ekNRHEjfJblpBRkQ8EQ">
-      <button id="btnAddPage" class="primary stacked" title="收藏当前正在浏览的页面" data-page-node-id="f0VwbVhSgtkJ4UIQt2Nd9t"><span class="btn-icon" data-page-node-id="JPkXhWwrEowBvfI6YySCql">☆</span><span class="btn-text" data-page-node-id="Bi1HAlEu2YPkyXkx80zxJd">当前页</span></button>
-      <button id="btnAiOrganize" title="AI 自动整理收藏（需在设置中配置 API Key）" data-page-node-id="bA15j4rNrHvKh7o7exMEFR">✨</button>
-      <button id="btnExpandAll" title="全部展开" data-page-node-id="ZUXbtHaGAaUg82Qs036JFr">⤢</button>
-      <button id="btnCollapseAll" title="全部折叠" data-page-node-id="NhLu9UX4tGsXP6kngmLSgM">⤡</button>
-      <button id="btnImport" title="从浏览器收藏夹导入" data-page-node-id="2T5SEvXDyH5sn2blyBzyxF">⇩</button>
-      <button id="btnAddCategory" class="stacked" title="新建分类" data-page-node-id="xLvtLQ8FDgh5eb5CSVPgHV"><span class="btn-icon" data-page-node-id="4fejUUjsFJ89mh4EownlmS">＋</span><span class="btn-text" data-page-node-id="YLG9SsODtRMTpt2HZu2bqx">分类</span></button>
-      <button id="btnSettings" title="设置" data-page-node-id="RxhPfa5wY3b16wIEuntCJD">⚙</button>
+  <header class="toolbar">
+    <span class="logo"><span class="logo-icon">📑</span><span class="logo-text">分类导航</span></span>
+    <div class="toolbar-actions">
+      <button id="btnAddPage" class="primary stacked" title="收藏当前正在浏览的页面"><span class="btn-icon">☆</span><span class="btn-text">当前页</span></button>
+      <button id="btnAiOrganize" title="AI 自动整理收藏（需在设置中配置 API Key）">✨</button>
+      <button id="btnExpandAll" title="全部展开">⤢</button>
+      <button id="btnCollapseAll" title="全部折叠">⤡</button>
+      <button id="btnImport" title="从浏览器收藏夹导入">⇩</button>
+      <button id="btnAddCategory" class="stacked" title="新建分类"><span class="btn-icon">＋</span><span class="btn-text">分类</span></button>
+      <button id="btnSettings" title="设置">⚙</button>
     </div>
   </header>
 
   <!-- 搜索框 -->
-  <div class="search-bar" data-page-node-id="HTIUm38ocZJdfDxdo9Tk0c">
-    <input type="text" id="searchInput" placeholder="🔍 搜索链接标题、网址或分类名…" data-page-node-id="73uYiO3qya294EBnQs1jvZ" />
-    <button id="searchClear" class="hidden" title="清除搜索" data-page-node-id="xkmExgC10dsy9USDufS0qo">✕</button>
+  <div class="search-bar">
+    <input type="text" id="searchInput" placeholder="🔍 搜索链接标题、网址或分类名…" />
+    <button id="searchClear" class="hidden" title="清除搜索">✕</button>
   </div>
   </div>
 
   <!-- 设置抽屉 -->
-  <section id="settingsPanel" class="settings hidden" data-page-node-id="keVSBxROk8vaM3IYQpPHCf">
-    <h3 data-page-node-id="4FAIK5WNoYoVGu1AhoGnO7">显示设置</h3>
-    <label class="setting-row" data-page-node-id="75mackwFDQ3LBfnYbfd96x">
-      <input type="checkbox" id="setIndentEnabled" data-page-node-id="CfuTvXSrMAcCmzIEfp3W7z" />
-      <span data-page-node-id="obvpASfiwm3OEDqjgAiGOJ">启用固定缩进（子分类与链接按层级缩进）</span>
+  <section id="settingsPanel" class="settings hidden">
+    <h3>显示设置</h3>
+    <label class="setting-row">
+      <input type="checkbox" id="setIndentEnabled" />
+      <span>启用固定缩进（子分类与链接按层级缩进）</span>
     </label>
-    <label class="setting-row" data-page-node-id="e178EbPpRGQEGx7KrOXBtO">
-      <span data-page-node-id="PhFRRJQCRLueAF3hntadF2">缩进宽度</span>
-      <input type="range" id="setIndentSize" min="0" max="40" step="2" data-page-node-id="hQrEB3DOKdEtnI8KLLotlt" />
-      <span id="indentSizeLabel" class="mono" data-page-node-id="nQGJBZMDHRNFlzWxLDI01u"></span>
+    <label class="setting-row">
+      <span>缩进宽度</span>
+      <input type="range" id="setIndentSize" min="0" max="40" step="2" />
+      <span id="indentSizeLabel" class="mono"></span>
     </label>
-    <label class="setting-row" data-page-node-id="NErNaI4puWr9ghU4FOfNj4">
-      <input type="checkbox" id="setDefaultCollapsed" data-page-node-id="WHmYgljt6kAE4BnoA3h4MF" />
-      <span data-page-node-id="84ARbq9OCOvhGvlZ5lLEtQ">新建分类默认折叠</span>
+    <label class="setting-row">
+      <span>最大缩进层级</span>
+      <input type="number" id="setMaxIndentDepth" min="1" max="8" step="1" />
+      <span class="dim">层</span>
     </label>
-    <label class="setting-row" data-page-node-id="n048Eg2o2EEAgfFkqK3vlk">
-      <input type="checkbox" id="setOpenInNewTab" data-page-node-id="U7FoXwSP1ADl7duVZ0GgnW" />
-      <span data-page-node-id="JgLUiqace9dgCCuHuCO8AJ">点击链接在新标签页打开（否则当前页打开）</span>
+    <p class="note">💡 超过最大缩进层级后不再右缩，靠层级色条与左侧导线区分上下级；鼠标悬停分类名可看完整路径。链接也可以有子链接（链接行上的「＋」）。</p>
+    <label class="setting-row">
+      <input type="checkbox" id="setDefaultCollapsed" />
+      <span>新建分类默认折叠</span>
     </label>
-    <p class="note" data-page-node-id="LT0nFtxoNCIx32B6oBEymJ">💡 拖动分类标题可排序；拖到另一分类中部可变为它的子分类。拖动链接可排序或移入其他分类。</p>
+    <label class="setting-row">
+      <input type="checkbox" id="setOpenInNewTab" />
+      <span>点击链接在新标签页打开（否则当前页打开）</span>
+    </label>
+    <p class="note">💡 拖动分类标题可排序；拖到另一分类中部可变为它的子分类。拖动链接可排序或移入其他分类。</p>
 
-    <h3 style="margin-top:10px" data-page-node-id="BtQEDOKyoxPkdiAVKn1unC">AI 整理（可选）</h3>
-    <label class="setting-row" data-page-node-id="Y2quAuZd3HQUpawx7rOqmi">
-      <span data-page-node-id="0ZZSVnbKjdA54DQFzN0YI6">服务商</span>
-      <select id="setAiProvider" data-page-node-id="yk6tJyKtFNGkdIZXRUUJHF">
-        <option value="deepseek" data-page-node-id="I6Ui2OZi4LNYTTyxjQDFfK">DeepSeek</option>
-        <option value="openai" data-page-node-id="TfmdZYBlTCn38GGFBGCJTh">OpenAI</option>
-        <option value="claude" data-page-node-id="2PAZ1ziatW7SMrTyUFMXBA">Claude</option>
+    <h3 style="margin-top:10px">面板形态</h3>
+    <label class="setting-row">
+      <span>显示方式</span>
+      <select id="setPanelMode">
+        <option value="native">长期固定：原生右侧栏</option>
+        <option value="float">自动隐藏：悬停屏幕右缘唤出</option>
       </select>
     </label>
-    <label class="setting-row" data-page-node-id="ihRT15ErzLEDRGrKn2ILtC">
-      <span data-page-node-id="SY4qdUaov2OGZylxQx0iB0">API Key</span>
-      <input type="password" id="setAiKey" placeholder="仅保存在本地浏览器" data-page-node-id="s2UAsqmlTpW55vu2DMyE24" />
+    <label class="setting-row">
+      <span>悬停唤出时长</span>
+      <input type="number" id="setHoverDelay" min="0" max="120" step="0.5" />
+      <span class="dim">秒</span>
     </label>
-    <label class="setting-row" data-page-node-id="1a2XMyO9zTOmUPTOFAz7P0">
-      <span data-page-node-id="FlVPtLNBjEj70YeSHeFB4Y">模型</span>
-      <input type="text" id="setAiModel" placeholder="留空使用默认模型" data-page-node-id="cSrDyTbAQukJBW83R4zxq5" />
-    </label>
-    <label class="setting-row" data-page-node-id="A3VMG43LOYMtF5CQpkh8jX">
-      <span data-page-node-id="0v6yHGXd3B5lF2WFxLzyzg">单次上限</span>
-      <input type="number" id="setAiMaxItems" min="10" max="500" step="10" data-page-node-id="V6gGVsptXrC46GQ2wLZZHd" />
-      <span class="dim" data-page-node-id="lCoPq7iRyFLS54MMM9GJZO">条链接</span>
-    </label>
-    <p class="note" data-page-node-id="qUBWvzhI9nlReS9j4xjbn0">配置后点击工具栏「✨」，AI 会给出归类建议，预览确认后才应用。</p>
+    <p class="note">「自动隐藏」模式会在每个网页右缘注入隐形触发条：鼠标停留到设定时长后面板滑出，移开 0.5 秒后自动收起，Esc 也可关闭。chrome:// 页面与应用商店等页面不可用；切换后已打开的网页需刷新一次才生效。</p>
 
-    <h3 style="margin-top:10px" data-page-node-id="cgtqjSJiI5qOk8gfADjCuJ">数据备份</h3>
-    <div class="setting-row" data-page-node-id="jECEdd9IMnUgUGqQPdNGkp">
-      <button id="btnExport" data-page-node-id="G3arBf9DnYuK46ZLA8CDJL">⬇ 导出 backup.json</button>
-      <button id="btnImportBackup" data-page-node-id="9ZpZucpG5fn4cFDDrCzEMX">⬆ 从 backup.json 恢复</button>
-      <input type="file" id="backupFileInput" accept=".json,application/json" class="hidden" data-page-node-id="jbneExMlYZDAHxKxXi7K5K" />
+    <h3 style="margin-top:10px">AI 整理（可选）</h3>
+    <label class="setting-row">
+      <span>服务商</span>
+      <select id="setAiProvider">
+        <option value="deepseek">DeepSeek</option>
+        <option value="openai">OpenAI</option>
+        <option value="claude">Claude</option>
+      </select>
+    </label>
+    <label class="setting-row">
+      <span>API Key</span>
+      <input type="password" id="setAiKey" placeholder="仅保存在本地浏览器" />
+    </label>
+    <label class="setting-row">
+      <span>模型</span>
+      <input type="text" id="setAiModel" placeholder="留空使用默认模型" />
+    </label>
+    <label class="setting-row">
+      <span>单次上限</span>
+      <input type="number" id="setAiMaxItems" min="10" max="500" step="10" />
+      <span class="dim">条链接</span>
+    </label>
+    <p class="note">配置后点击工具栏「✨」，AI 会给出归类建议，预览确认后才应用。</p>
+
+    <h3 style="margin-top:10px">数据备份</h3>
+    <div class="setting-row">
+      <button id="btnExport">⬇ 导出 backup.json</button>
+      <button id="btnImportBackup">⬆ 从 backup.json 恢复</button>
+      <input type="file" id="backupFileInput" accept=".json,application/json" class="hidden" />
     </div>
-    <p class="note" data-page-node-id="JAMlhPQU8StHo8eBRgDhcC">卸载扩展会清空本地数据，建议定期导出备份。恢复会覆盖当前全部分类与设置。</p>
+    <p class="note">卸载扩展会清空本地数据，建议定期导出备份。恢复会覆盖当前全部分类与设置。</p>
   </section>
 
   <!-- 分类列表 -->
-  <main id="categoryList" class="category-list" data-page-node-id="b4GZWjMBJ6Fxjre8ADsU7g"></main>
+  <main id="categoryList" class="category-list"></main>
 
   <!-- 空状态 -->
-  <div id="emptyState" class="empty hidden" data-page-node-id="RDExBvGKZaI4o5ihn8VsjH">
-    <p data-page-node-id="E4CidI77WhC4puBCUSFzRi">还没有任何分类</p>
-    <p class="dim" data-page-node-id="TSjUyGCn5xOWxYWxCkELXG">点击右上角「＋ 分类」开始整理你的常用网页，<br data-page-node-id="wi9QukI2sE6zmOzgrEFCuU"/>或用「⇩」从浏览器收藏夹一键导入（子文件夹会变成子分类）。</p>
+  <div id="emptyState" class="empty hidden">
+    <p>还没有任何分类</p>
+    <p class="dim">点击右上角「＋ 分类」开始整理你的常用网页，<br/>或用「⇩」从浏览器收藏夹一键导入（子文件夹会变成子分类）。</p>
   </div>
 
   <!-- 通用弹窗 -->
-  <div id="modalMask" class="modal-mask hidden" data-page-node-id="I954LDBULYgCKNnSutfxvb">
-    <div class="modal" data-page-node-id="T47MJooC99DeJh5tCycKzM">
-      <h3 id="modalTitle" data-page-node-id="UDQG6nRrz1ErAOrFpDU0I4"></h3>
-      <div id="modalBody" data-page-node-id="rdNl6b9zJsxAMCGXnQ3QfN"></div>
-      <div class="modal-actions" data-page-node-id="78j1GcgEolCEKiCWbNXHAW">
-        <button id="modalCancel" data-page-node-id="7zGVvjdXtRZWygQqM71Fwa">取消</button>
-        <button id="modalOk" class="primary" data-page-node-id="anDobKH4Q5DGl6TcqbTQ5P">确定</button>
+  <div id="modalMask" class="modal-mask hidden">
+    <div class="modal">
+      <h3 id="modalTitle"></h3>
+      <div id="modalBody"></div>
+      <div class="modal-actions">
+        <button id="modalCancel">取消</button>
+        <button id="modalOk" class="primary">确定</button>
       </div>
     </div>
   </div>
