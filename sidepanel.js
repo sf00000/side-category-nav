@@ -112,6 +112,42 @@ function findLinkByUrl(url) {
   return walk(state.categories);
 }
 
+// 查找某 URL 已存在的全部位置（全树、含子链接），返回路径数组
+// 分类层级用 "/" 连接，子链接链用 " › " 连接（如 ["量化/数据", "量化 › 父链接"]）
+// 用于收藏时的防重复提示；比较时忽略尾部斜杠
+function findUrlLocations(url) {
+  const norm = (u) => String(u || "").replace(/\/+$/, "");
+  const target = norm(url);
+  const paths = [];
+  const walkLinks = (links, path) => {
+    for (const l of links) {
+      if (norm(l.url) === target) paths.push(path);
+      walkLinks(l.children || [], path + " › " + l.title);
+    }
+  };
+  const walk = (list, path) => {
+    for (const n of list) {
+      const p = path ? path + "/" + n.name : n.name;
+      walkLinks(n.links, p);
+      walk(n.children, p);
+    }
+  };
+  walk(state.categories, "");
+  return paths;
+}
+
+// 收藏防重复：已存在则弹窗提示位置并返回 true（表示重复，应中止）
+function isDuplicateUrl(url) {
+  const locs = findUrlLocations(url);
+  if (locs.length === 0) return false;
+  alert(
+    `❌ 收藏失败：这个网址已经收藏过了\n\n` +
+    locs.map((p) => "· " + p).join("\n") +
+    `\n\n如需移动它，可用拖拽或 AI 整理。`
+  );
+  return true;
+}
+
 // id 是否位于分类 root 的子树中（含 root 自身）
 function inSubtree(root, id) {
   if (root.id === id) return true;
@@ -492,6 +528,7 @@ function addLink(cat, preset) {
         alert("标题和网址都要填写，面板里只认标题。");
         return false;
       }
+      if (isDuplicateUrl(data.url)) return false;
       cat.links.push(newLink(data.title, data.url));
       await save();
       render();
@@ -511,6 +548,7 @@ function addSubLink(parentLink) {
         alert("标题和网址都要填写，面板里只认标题。");
         return false;
       }
+      if (isDuplicateUrl(data.url)) return false;
       parentLink.children.push(newLink(data.title, data.url));
       parentLink.collapsed = false; // 展开父链接让新子链接可见
       await save();
@@ -530,6 +568,8 @@ function editLink(cat, link) {
         alert("标题和网址都要填写，面板里只认标题。");
         return false;
       }
+      // 改了网址时做全局防重（旧网址所在位置就是本链接自己，天然被排除）
+      if (data.url !== link.url && isDuplicateUrl(data.url)) return false;
       Object.assign(link, data);
       await save();
       render();
@@ -581,10 +621,7 @@ async function addCurrentPage() {
       }
       const found = findNode(body.querySelector("#m-catSelect").value);
       if (!found) return false;
-      if (found.node.links.some((l) => l.url === data.url)) {
-        alert("该分类下已收藏过这个网址。");
-        return false;
-      }
+      if (isDuplicateUrl(data.url)) return false;
       found.node.links.push(newLink(data.title, data.url));
       state.settings.lastCategoryId = found.node.id; // 记住本次选择
       await save();
