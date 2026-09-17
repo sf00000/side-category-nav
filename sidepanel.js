@@ -311,12 +311,15 @@ function renderLink(link, level, linkDepth, container, path) {
   row.dataset.linkId = link.id;
   row.draggable = true;
   row.style.paddingLeft = `calc(8px + ${level} * var(--indent))`;
+  const isWebLink = /^https?:/i.test(link.url);
   row.innerHTML = `
     ${hasKids
       ? `<span class="link-arrow" data-action="toggle-link" title="展开/折叠子链接">▼</span>`
       : `<span class="link-arrow-spacer"></span>`}
     <span class="drag-handle">⠿</span>
-    <img class="favicon" src="${faviconUrl(link.url)}" onerror="this.style.visibility='hidden'" />
+    ${isWebLink
+      ? `<img class="favicon" src="${faviconUrl(link.url)}" onerror="this.style.visibility='hidden'" />`
+      : `<span class="favicon file-icon" title="本地文件">📄</span>`}
     <a href="${escapeHtml(link.url)}" title="${escapeHtml(link.title)}&#10;${escapeHtml(link.url)}"
        ${state.settings.openInNewTab ? 'target="_blank" rel="noopener"' : ""}>${highlight(link.title)}</a>
     ${hasKids ? `<span class="cat-count">${countLinkTree(link) - 1}</span>` : ""}
@@ -430,18 +433,32 @@ function linkFormHtml({ title = "", url = "" } = {}) {
     <label>标题（必填，面板里显示的名字）
       <input type="text" id="m-linkTitle" required placeholder="例如：东方财富 - 沪深行情" value="${escapeHtml(title)}" />
     </label>
-    <label>网址
-      <input type="url" id="m-linkUrl" placeholder="https://..." value="${escapeHtml(url)}" />
+    <label>网址 / 路径
+      <input type="text" id="m-linkUrl" placeholder="https://... 或本地绝对路径 /Users/.../a.html" value="${escapeHtml(url)}" />
     </label>
-    <p class="note">💡 如果这个网页正开在标签页里，填完网址后会自动带入它的标题。</p>
+    <p class="note">💡 支持网页网址和本地文件绝对路径（自动转为 file://）。如果目标网页正开在标签页里，填完会自动带入它的标题。</p>
   `;
 }
 
-function readLinkForm(body) {
-  let url = body.querySelector("#m-linkUrl").value.trim();
-  let title = body.querySelector("#m-linkTitle").value.trim();
+// 归一化用户输入的网址：
+// · file:// 或 http(s):// 直接返回
+// · 绝对路径（/Users/... 或 C:\...）→ file:// URL，支持收藏本地 HTML/PDF 等文件
+// · 其他（如 example.com）→ 补 https://
+function normalizeInputUrl(raw) {
+  const url = raw.trim();
   if (!url) return null;
-  if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+  if (/^(https?|file):\/\//i.test(url)) return url;
+  if (/^\//.test(url) || /^[a-zA-Z]:[\\/]/.test(url)) {
+    try { return new URL("file://" + url.replace(/\\/g, "/")).href; }
+    catch { return "file://" + encodeURI(url.replace(/\\/g, "/")); }
+  }
+  return "https://" + url;
+}
+
+function readLinkForm(body) {
+  const url = normalizeInputUrl(body.querySelector("#m-linkUrl").value);
+  const title = body.querySelector("#m-linkTitle").value.trim();
+  if (!url) return null;
   if (!title) return null; // 标题必填，不允许只存一个裸链接
   return { title, url };
 }
@@ -453,9 +470,8 @@ function attachTabTitleAutofill(body) {
   if (!urlInput || !titleInput) return;
   urlInput.addEventListener("change", async () => {
     if (titleInput.value.trim()) return;
-    let url = urlInput.value.trim();
+    const url = normalizeInputUrl(urlInput.value);
     if (!url) return;
-    if (!/^https?:\/\//i.test(url)) url = "https://" + url;
     try {
       const tabs = await chrome.tabs.query({});
       const norm = (u) => (u || "").replace(/\/+$/, "");
@@ -533,8 +549,8 @@ function flattenTree(list, depth = 0, out = []) {
 
 async function addCurrentPage() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !tab.url || !/^https?:/i.test(tab.url)) {
-    alert("当前页面无法收藏（仅支持 http/https 页面）。");
+  if (!tab || !tab.url || !/^(https?|file):/i.test(tab.url)) {
+    alert("当前页面无法收藏（仅支持 http/https/file 页面）。本地文件收藏需先在 chrome://extensions 里给本扩展开启「允许访问文件网址」。");
     return;
   }
   if (state.categories.length === 0) {
