@@ -953,8 +953,10 @@ async function exportCategory(cat) {
   }
   const md = categoryToMarkdown(cat);
   const d = new Date();
-  const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
-  const filename = `side-nav-${sanitizeFilename(cat.name)}-${stamp}.md`;
+  const p2 = (n) => String(n).padStart(2, "0");
+  // 默认文件名：智能分类-<分类名>-<YYYYMMDD>-<HHMM>.md
+  const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}`;
+  const filename = `智能分类-${sanitizeFilename(cat.name)}-${stamp}.md`;
   try {
     const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
