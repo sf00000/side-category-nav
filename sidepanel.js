@@ -316,6 +316,7 @@ function renderCategory(cat, depth, path) {
       <button data-action="cat-bottom" title="移到当前层级最后">⤓</button>
       <button data-action="add-link" title="添加链接">＋</button>
       <button data-action="add-subcat" title="新建子分类">⧉</button>
+      <button data-action="cat-export" title="导出此分类（含子分类与子链接）为 Markdown">⇲</button>
       <button data-action="rename-cat" title="重命名">✎</button>
       <button data-action="del-cat" class="danger" title="删除分类（含子分类）">✕</button>
     </div>
@@ -1049,19 +1050,39 @@ function confirmImportCategory(cat) {
        </label>`
     : `<p class="note">没有发现同名分类，将作为新分类导入。</p>`;
 
+  // 导入位置：顶层，或任一已有分类下（作为其子分类）
+  const targetRows = [`<option value="root">顶层（作为一级分类）</option>`];
+  const walkTargets = (list, depth) => list.forEach((c) => {
+    targetRows.push(`<option value="${c.id}">${"\u00A0".repeat(depth * 2)}${escapeHtml(c.name)}</option>`);
+    walkTargets(c.children, depth + 1);
+  });
+  walkTargets(state.categories, 0);
+  const targetHtml = `
+    <p class="note" style="margin-top:10px;">导入位置（选择「保留两者」或无同名时生效）：</p>
+    <select name="impTarget" style="width:100%;padding:4px 6px;margin-top:2px;">${targetRows.join("")}</select>`;
+
   openModal({
     title: "导入分类",
-    bodyHtml: `<p>「<b>${escapeHtml(cat.name)}</b>」：${linkCount} 个链接${subCount ? `，${subCount} 个子分类` : ""}。</p>${dupHtml}`,
+    bodyHtml: `<p>「<b>${escapeHtml(cat.name)}</b>」：${linkCount} 个链接${subCount ? `，${subCount} 个子分类` : ""}。</p>${dupHtml}${targetHtml}`,
     onOk: async (body) => {
-      if (sameName.length) {
-        const checked = body.querySelector('input[name="impMode"]:checked');
-        if (checked && checked.value === "copy") {
+      const mode = sameName.length
+        ? (body.querySelector('input[name="impMode"]:checked')?.value === "copy" ? "copy" : "merge")
+        : "copy";
+      if (mode === "merge") {
+        mergeCategory(cat, sameName[0]);
+      } else {
+        const target = body.querySelector("select[name=impTarget]")?.value || "root";
+        if (target === "root") {
           state.categories.push(cat);
         } else {
-          mergeCategory(cat, sameName[0]);
+          const parent = findNode(target)?.node;
+          if (parent) {
+            parent.children.push(cat);
+            parent.collapsed = false; // 自动展开，让用户看到导入结果
+          } else {
+            state.categories.push(cat);
+          }
         }
-      } else {
-        state.categories.push(cat);
       }
       await save();
       render();
