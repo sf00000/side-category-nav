@@ -3,7 +3,7 @@
   "name": "侧边分类导航",
   "version": "1.0.0",
   "description": "在浏览器右侧边栏固定显示自定义分类的网页收藏，支持分类折叠与缩进配置。",
-  "permissions": ["sidePanel", "storage", "bookmarks", "favicon", "tabs"],
+  "permissions": ["sidePanel", "storage", "bookmarks", "favicon", "tabs", "downloads"],
   "host_permissions": [
     "https://api.openai.com/",
     "https://api.deepseek.com/",

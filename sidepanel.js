@@ -860,7 +860,216 @@ async function aiOrganize() {
   }
 }
 
-/* ---------------- 从收藏夹导入（递归保留层级） ---------------- */
+/* ---------------- 分类导出 / 导入（Markdown 明文格式） ----------------
+   格式约定（人可直接阅读，也可被本插件无损解析还原）：
+     # 分类名          —— 1 级标题 = 分类（可多层 ## 嵌套子分类）
+     - [标题](网址)    —— 列表项 = 链接；缩进 2 空格 = 下一级子链接
+ */
+function escapeMd(s) {
+  return String(s).replace(/\\/g, "\\\\").replace(/\[/g, "\\[").replace(/\]/g, "\\]");
+}
+function unescapeMd(s) {
+  return String(s).replace(/\\([\[\]()\\])/g, "$1");
+}
+
+function sanitizeFilename(name) {
+  const s = String(name || "").replace(/[\\/:*?"<>|\s]+/g, "_").replace(/^\.+/, "");
+  return (s.slice(0, 40) || "category");
+}
+
+function categoryToMarkdown(cat) {
+  const out = [`# ${escapeMd(cat.name)}`];
+  const walkLinks = (links, indent) => {
+    for (const l of links) {
+      // 括号/空格在 Markdown 链接里有语法含义，转义成百分号编码
+      const url = String(l.url)
+        .replace(/\(/g, "%28").replace(/\)/g, "%29").replace(/\s+/g, "%20");
+      out.push(`${"  ".repeat(indent)}- [${escapeMd(l.title)}](${url})`);
+      if (l.children && l.children.length) walkLinks(l.children, indent + 1);
+    }
+  };
+  const walkCat = (c, level) => {
+    walkLinks(c.links, 0);
+    for (const ch of c.children) {
+      out.push("", `${"#".repeat(level + 1)} ${escapeMd(ch.name)}`);
+      walkCat(ch, level + 1);
+    }
+  };
+  walkCat(cat, 1);
+  return out.join("\n") + "\n";
+}
+
+function parseCategoryMarkdown(text) {
+  let root = null;
+  const stack = []; // 未闭合的标题层级 { level, cat }
+  const addLink = (cat, depth, title, url) => {
+    // _chain[0] 是分类本身（链接进 .links），其后每层是当前深度的末级链接（子链接进其 .children）
+    const chain = cat._chain || (cat._chain = [{ isRoot: true, cat }]);
+    const idx = Math.max(0, Math.min(depth, chain.length - 1));
+    const link = newLink(title, url);
+    const container = chain[idx];
+    if (container.isRoot) container.cat.links.push(link);
+    else container.children.push(link);
+    chain.length = idx + 1;
+    chain.push(link);
+  };
+  for (const raw of String(text).split(/\r?\n/)) {
+    const line = raw.replace(/\s+$/, "");
+    if (!line.trim() || line.trim().startsWith("```")) continue;
+    const h = line.match(/^(#{1,6})\s+(.+)$/);
+    if (h) {
+      const level = h[1].length;
+      const cat = newCategory(unescapeMd(h[2].trim()), false);
+      if (!root) {
+        root = cat;
+      } else {
+        while (stack.length && stack[stack.length - 1].level >= level) stack.pop();
+        const parent = stack.length ? stack[stack.length - 1].cat : root;
+        parent.children.push(cat);
+      }
+      stack.push({ level, cat });
+      continue;
+    }
+    const m = line.match(/^(\s*)-\s+\[(.+?)\]\((.+)\)\s*$/);
+    if (m && root) {
+      const top = stack[stack.length - 1];
+      if (!top) continue; // 标题前的散落链接行，忽略
+      const indent = m[1].replace(/\t/g, "  ").length;
+      // 还原导出时为绕开 Markdown 括号语法做的转义
+      const url = m[3].trim().replace(/%28/g, "(").replace(/%29/g, ")");
+      addLink(top.cat, Math.floor(indent / 2), unescapeMd(m[2].trim()), url);
+    }
+  }
+  const clean = (c) => { delete c._chain; c.children.forEach(clean); };
+  if (root) clean(root);
+  return root;
+}
+
+async function exportCategory(cat) {
+  if (countLinks(cat) === 0 && countCategories(cat) === 0) {
+    alert("该分类是空的，没有可导出的内容。");
+    return;
+  }
+  const md = categoryToMarkdown(cat);
+  const d = new Date();
+  const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+  const filename = `side-nav-${sanitizeFilename(cat.name)}-${stamp}.md`;
+  try {
+    const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    // saveAs: true → 弹出系统「存储为」对话框，可自选保存目录
+    await chrome.downloads.download({ url, filename, saveAs: true });
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (err) {
+    alert("导出失败：" + (err && err.message ? err.message : err));
+  }
+}
+
+function importCategoryFile() {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".md,.markdown,.mdown,.mkd,text/markdown,text/plain";
+  input.onchange = () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      let cat = null;
+      try { cat = parseCategoryMarkdown(reader.result); } catch { /* 格式错误 */ }
+      if (!cat) {
+        alert("无法识别文件内容：需要本插件导出的 Markdown 格式（# 分类名 + ## 子分类 + - [标题](网址) 列表）。");
+        return;
+      }
+      confirmImportCategory(cat);
+    };
+    reader.readAsText(file, "utf-8");
+  };
+  input.click();
+}
+
+// 收集某分类子树内全部 URL（含子链接），用于合并去重；忽略尾部斜杠
+function collectSubtreeUrls(cat) {
+  const urls = new Set();
+  const norm = (u) => String(u).replace(/\/+$/, "");
+  const walkLinks = (links) => links.forEach((l) => {
+    urls.add(norm(l.url));
+    if (l.children && l.children.length) walkLinks(l.children);
+  });
+  const walk = (c) => { walkLinks(c.links); c.children.forEach(walk); };
+  walk(cat);
+  return urls;
+}
+
+// 把 src 合并进 dst：链接按 URL 去重，子分类按名称递归合并
+function mergeCategory(src, dst) {
+  const urls = collectSubtreeUrls(dst);
+  const norm = (u) => String(u).replace(/\/+$/, "");
+  const walkLinks = (links) => {
+    for (const l of links) {
+      const key = norm(l.url);
+      if (urls.has(key)) {
+        // 本体已存在，但其子链接可能仍有新增，逐个检查
+        if (l.children && l.children.length) walkLinks(l.children);
+      } else {
+        dst.links.push(l);
+        urls.add(key);
+      }
+    }
+  };
+  walkLinks(src.links);
+  for (const child of src.children) {
+    const existing = dst.children.find((c) => c.name === child.name);
+    if (existing) mergeCategory(child, existing);
+    else dst.children.push(child);
+  }
+  dst.collapsed = false;
+}
+
+function confirmImportCategory(cat) {
+  const linkCount = countLinks(cat);
+  const subCount = countCategories(cat);
+
+  // 同名检测：在现有全树（任意层级）中查找同名分类
+  const sameName = [];
+  const walkNames = (list) => list.forEach((c) => {
+    if (c.name === cat.name) sameName.push(c);
+    walkNames(c.children);
+  });
+  walkNames(state.categories);
+
+  const dupHtml = sameName.length
+    ? `<p class="note">⚠️ 已存在同名分类「${escapeHtml(cat.name)}」（共 ${sameName.length} 处）。请选择处理方式：</p>
+       <label style="display:block;margin:6px 0;">
+         <input type="radio" name="impMode" value="merge" checked />
+         合并到现有分类（网址重复的自动跳过）
+       </label>
+       <label style="display:block;margin:6px 0;">
+         <input type="radio" name="impMode" value="copy" />
+         保留两者（作为独立分类导入，同名共存）
+       </label>`
+    : `<p class="note">没有发现同名分类，将作为新分类导入。</p>`;
+
+  openModal({
+    title: "导入分类",
+    bodyHtml: `<p>「<b>${escapeHtml(cat.name)}</b>」：${linkCount} 个链接${subCount ? `，${subCount} 个子分类` : ""}。</p>${dupHtml}`,
+    onOk: async (body) => {
+      if (sameName.length) {
+        const checked = body.querySelector('input[name="impMode"]:checked');
+        if (checked && checked.value === "copy") {
+          state.categories.push(cat);
+        } else {
+          mergeCategory(cat, sameName[0]);
+        }
+      } else {
+        state.categories.push(cat);
+      }
+      await save();
+      render();
+    }
+  });
+}
+
+
 // 收集整棵树中已存在的 URL 与标题（含子链接），用于导入去重
 function collectExistingKeys() {
   const urls = new Set(), titles = new Set();
@@ -876,6 +1085,7 @@ function collectExistingKeys() {
   return { urls, titles };
 }
 
+/* ---------------- 从收藏夹导入（递归保留层级） ---------------- */
 function bookmarkFolderToCategory(folder, skip) {
   const cat = newCategory(folder.title || "未命名", state.settings.defaultCollapsed);
   for (const n of folder.children || []) {
@@ -1202,6 +1412,7 @@ function bindEvents() {
       case "del-cat": deleteCategory(cat); break;
       case "cat-top": moveCatToEdge(found, "top"); break;
       case "cat-bottom": moveCatToEdge(found, "bottom"); break;
+      case "cat-export": exportCategory(cat); break;
       case "toggle-link": {
         const hit = findLink(e.target.closest(".link-row")?.dataset.linkId);
         if (hit) {
@@ -1263,6 +1474,7 @@ function bindEvents() {
   $("#btnAiOrganize").onclick = aiOrganize;
   $("#btnAddCategory").onclick = () => addCategory(null);
   $("#btnImport").onclick = importFromBookmarks;
+  $("#btnImportFile").onclick = importCategoryFile;
   $("#btnSettings").onclick = () => $("#settingsPanel").classList.toggle("hidden");
   $("#btnExpandAll").onclick = () => {
     const walk = (list) => list.forEach((c) => { c.collapsed = false; walk(c.children); });
