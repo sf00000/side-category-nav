@@ -194,6 +194,12 @@ function migrateLinks(links) {
 }
 
 /* ---------------- 存储 ---------------- */
+// 最近一次渲染对应的数据快照：用于跳过本面板自己写入触发的重绘
+let lastSnapshot = "";
+let lastSettingsJson = "";
+
+const snapshotOf = () => JSON.stringify([state.categories, state.settings]);
+
 async function loadState() {
   const data = await chrome.storage.local.get(["categories", "settings"]);
   state.categories = Array.isArray(data.categories) ? data.categories : [];
@@ -206,6 +212,40 @@ async function save() {
     categories: state.categories,
     settings: state.settings
   });
+}
+
+// 设置面板只在设置真变了时才回填，避免别的面板改动数据时打断本面板的输入
+function syncSettingsUI() {
+  const j = JSON.stringify(state.settings);
+  if (j === lastSettingsJson) return;
+  lastSettingsJson = j;
+  applySettingsToUI();
+}
+
+function applyRenderIfChanged() {
+  const s = snapshotOf();
+  if (s === lastSnapshot) return;
+  lastSnapshot = s;
+  syncSettingsUI();
+  render();
+}
+
+// 所有数据变更统一走这里：先拉取存储中的最新数据（原生侧栏和各个悬浮
+// 面板都可能有新写入），在最新数据上重放本次变更，再写回。
+// mutate 内必须按 id 重新定位节点，不能闭包引用旧树上的对象——
+// loadState 会整体替换 state.categories / state.settings。
+// 本面板内串行执行，把多面板互相覆盖的窗口从「分钟级（拿旧数据整份
+// 覆盖）」缩小到「读改写之间的毫秒级」。
+let commitChain = Promise.resolve();
+function commit(mutate) {
+  const run = (async () => {
+    await loadState();
+    mutate();
+    await save();
+    applyRenderIfChanged();
+  })();
+  commitChain = run.catch((err) => console.error("保存变更失败：", err));
+  return run;
 }
 
 /* ---------------- 渲染 ---------------- */
@@ -380,7 +420,15 @@ function renderLink(link, level, linkDepth, container, path) {
 }
 
 /* ---------------- 弹窗 ---------------- */
+let modalSeq = 0; // 每次打开弹窗递增，用于丢弃过期弹窗的异步回调（如已取消的 AI 请求）
+
 function openModal({ title, bodyHtml, onOk, onOpen }) {
+  modalSeq++;
+  // 复位公共「确定」按钮：AI 整理等流程可能隐藏过它或改过文案，
+  // 不复位的话，之后打开的弹窗（如新建分类）会没有可点的确定按钮
+  const okBtn = $("#modalOk");
+  okBtn.style.display = "";
+  okBtn.textContent = "确定";
   $("#modalTitle").textContent = title;
   $("#modalBody").innerHTML = bodyHtml;
   $("#modalMask").classList.remove("hidden");
@@ -401,15 +449,19 @@ function closeModal() { $("#modalMask").classList.add("hidden"); }
 /* ---------------- 分类操作 ---------------- */
 // 把分类移到当前所在层级的最前(top)/最后(bottom)，层级不变
 function moveCatToEdge(found, edge) {
-  const { node, parentList } = found;
-  const idx = parentList.indexOf(node);
-  if (idx === -1) return;
-  if (edge === "top" && idx === 0) return;
-  if (edge === "bottom" && idx === parentList.length - 1) return;
-  parentList.splice(idx, 1);
-  if (edge === "top") parentList.unshift(node);
-  else parentList.push(node);
-  save().then(render);
+  const id = found.node.id;
+  commit(() => {
+    const f = findNode(id);
+    if (!f) return;
+    const { node, parentList } = f;
+    const idx = parentList.indexOf(node);
+    if (idx === -1) return;
+    if (edge === "top" && idx === 0) return;
+    if (edge === "bottom" && idx === parentList.length - 1) return;
+    parentList.splice(idx, 1);
+    if (edge === "top") parentList.unshift(node);
+    else parentList.push(node);
+  });
 }
 
 function addCategory(parent) {
@@ -419,15 +471,18 @@ function addCategory(parent) {
     onOk: async (body) => {
       const name = body.querySelector("#m-catName").value.trim();
       if (!name) return false;
-      const cat = newCategory(name, state.settings.defaultCollapsed);
-      if (parent) {
-        parent.children.unshift(cat); // 新建子分类排在最前
-        parent.collapsed = false; // 展开父分类让新子分类可见
-      } else {
-        state.categories.unshift(cat); // 新建分类排在最前
-      }
-      await save();
-      render();
+      const parentId = parent ? parent.id : null;
+      await commit(() => {
+        const cat = newCategory(name, state.settings.defaultCollapsed);
+        const p = parentId ? findNode(parentId)?.node : null;
+        if (parentId) {
+          if (!p) return;
+          p.children.unshift(cat); // 新建子分类排在最前
+          p.collapsed = false; // 展开父分类让新子分类可见
+        } else {
+          state.categories.unshift(cat); // 新建分类排在最前
+        }
+      });
     }
   });
 }
@@ -439,9 +494,11 @@ function renameCategory(cat) {
     onOk: async (body) => {
       const name = body.querySelector("#m-catName").value.trim();
       if (!name) return false;
-      cat.name = name;
-      await save();
-      render();
+      const id = cat.id;
+      await commit(() => {
+        const f = findNode(id);
+        if (f) f.node.name = name;
+      });
     }
   });
 }
@@ -453,13 +510,14 @@ function deleteCategory(cat) {
     title: "删除分类",
     bodyHtml: `<p class="note">确定删除分类「${escapeHtml(cat.name)}」吗？<br/>将一并删除 ${subCount} 个子分类、共 ${linkCount} 个链接，且不可恢复。</p>`,
     onOk: async () => {
-      const found = findNode(cat.id);
-      if (found) {
-        const i = found.parentList.findIndex((n) => n.id === cat.id);
-        found.parentList.splice(i, 1);
-      }
-      await save();
-      render();
+      const id = cat.id;
+      await commit(() => {
+        const found = findNode(id);
+        if (found) {
+          const i = found.parentList.findIndex((n) => n.id === id);
+          found.parentList.splice(i, 1);
+        }
+      });
     }
   });
 }
@@ -530,9 +588,13 @@ function addLink(cat, preset) {
         return false;
       }
       if (isDuplicateUrl(data.url)) return false;
-      cat.links.push(newLink(data.title, data.url));
-      await save();
-      render();
+      const catId = cat.id;
+      await commit(() => {
+        const f = findNode(catId);
+        if (!f) return;
+        if (isDuplicateUrl(data.url)) return; // 提交前以最新数据再查一次
+        f.node.links.push(newLink(data.title, data.url));
+      });
     }
   });
 }
@@ -550,10 +612,14 @@ function addSubLink(parentLink) {
         return false;
       }
       if (isDuplicateUrl(data.url)) return false;
-      parentLink.children.push(newLink(data.title, data.url));
-      parentLink.collapsed = false; // 展开父链接让新子链接可见
-      await save();
-      render();
+      const parentId = parentLink.id;
+      await commit(() => {
+        const hit = findLink(parentId);
+        if (!hit) return;
+        if (isDuplicateUrl(data.url)) return; // 提交前以最新数据再查一次
+        hit.link.children.push(newLink(data.title, data.url));
+        hit.link.collapsed = false; // 展开父链接让新子链接可见
+      });
     }
   });
 }
@@ -569,11 +635,14 @@ function editLink(cat, link) {
         alert("标题和网址都要填写，面板里只认标题。");
         return false;
       }
-      // 改了网址时做全局防重（旧网址所在位置就是本链接自己，天然被排除）
-      if (data.url !== link.url && isDuplicateUrl(data.url)) return false;
-      Object.assign(link, data);
-      await save();
-      render();
+      const linkId = link.id;
+      await commit(() => {
+        const hit = findLink(linkId);
+        if (!hit) return;
+        // 改了网址时做全局防重（旧网址所在位置就是本链接自己，天然被排除）
+        if (data.url !== hit.link.url && isDuplicateUrl(data.url)) return;
+        Object.assign(hit.link, data);
+      });
     }
   });
 }
@@ -620,13 +689,15 @@ async function addCurrentPage() {
         alert("标题和网址都要填写，面板里只认标题。");
         return false;
       }
-      const found = findNode(body.querySelector("#m-catSelect").value);
-      if (!found) return false;
+      const catId = body.querySelector("#m-catSelect").value;
       if (isDuplicateUrl(data.url)) return false;
-      found.node.links.push(newLink(data.title, data.url));
-      state.settings.lastCategoryId = found.node.id; // 记住本次选择
-      await save();
-      render();
+      await commit(() => {
+        const found = findNode(catId);
+        if (!found) return;
+        if (isDuplicateUrl(data.url)) return; // 提交前以最新数据再查一次
+        found.node.links.push(newLink(data.title, data.url));
+        state.settings.lastCategoryId = catId; // 记住本次选择
+      });
     }
   });
 }
@@ -783,6 +854,7 @@ async function aiOrganize() {
     bodyHtml: `<p class="note" id="aiStatus">正在调用 ${AI_PROVIDERS[s.aiProvider].name}（${items.length} 个链接），请稍候…</p>`,
     onOk: () => {}
   });
+  const seq = modalSeq; // 弹窗被关闭/换掉后，过期的异步回调直接丢弃
   const okBtn = $("#modalOk");
   okBtn.style.display = "none";
 
@@ -798,6 +870,7 @@ async function aiOrganize() {
 
   try {
     const text = await callAI(prompt);
+    if (seq !== modalSeq) return; // 弹窗已被关闭或替换，丢弃过期结果
     const { items: json, truncated } = parseMovesJson(text);
 
     const moves = [];
@@ -813,6 +886,7 @@ async function aiOrganize() {
       $("#aiStatus").textContent = truncated
         ? "模型输出不完整且未能恢复任何建议，请重试（或减少链接数量）。"
         : "AI 认为当前分类已经合理，无需调整。";
+      okBtn.style.display = ""; // 恢复「确定」，让用户能正常关掉这个弹窗
       return;
     }
 
@@ -849,15 +923,15 @@ async function aiOrganize() {
         alert("没有勾选任何调整项。");
         return;
       }
-      applyAiMoves(selected);
-      await save();
-      render();
+      await commit(() => applyAiMoves(selected)); // 在最新数据上应用，再统一写回
       okBtn.textContent = "确定";
       closeModal();
       alert(`已应用 ${selected.length} 条调整。`);
     };
   } catch (err) {
+    if (seq !== modalSeq) return; // 弹窗已被关闭或替换，丢弃过期错误
     $("#aiStatus").textContent = "调用失败：" + err.message;
+    okBtn.style.display = ""; // 恢复「确定」，让用户能正常关掉这个弹窗
   }
 }
 
@@ -917,7 +991,9 @@ function parseCategoryMarkdown(text) {
   for (const raw of String(text).split(/\r?\n/)) {
     const line = raw.replace(/\s+$/, "");
     if (!line.trim() || line.trim().startsWith("```")) continue;
-    const h = line.match(/^(#{1,6})\s+(.+)$/);
+    // 标题层级数不设上限：导出端按嵌套深度输出任意数量的 #（如 8 层分类
+    // 会输出 ########），解析端必须同样放行，往返导入才不会截断层级
+    const h = line.match(/^(#+)\s+(.+)$/);
     if (h) {
       const level = h[1].length;
       const cat = newCategory(unescapeMd(h[2].trim()), false);
@@ -990,39 +1066,40 @@ function importCategoryFile() {
   input.click();
 }
 
-// 收集某分类子树内全部 URL（含子链接），用于合并去重；忽略尾部斜杠
-function collectSubtreeUrls(cat) {
-  const urls = new Set();
-  const norm = (u) => String(u).replace(/\/+$/, "");
-  const walkLinks = (links) => links.forEach((l) => {
-    urls.add(norm(l.url));
-    if (l.children && l.children.length) walkLinks(l.children);
-  });
-  const walk = (c) => { walkLinks(c.links); c.children.forEach(walk); };
-  walk(cat);
-  return urls;
-}
-
-// 把 src 合并进 dst：链接按 URL 去重，子分类按名称递归合并
-function mergeCategory(src, dst) {
-  const urls = collectSubtreeUrls(dst);
-  const norm = (u) => String(u).replace(/\/+$/, "");
-  const walkLinks = (links) => {
-    for (const l of links) {
-      const key = norm(l.url);
-      if (urls.has(key)) {
-        // 本体已存在，但其子链接可能仍有新增，逐个检查
-        if (l.children && l.children.length) walkLinks(l.children);
-      } else {
-        dst.links.push(l);
-        urls.add(key);
-      }
+// 把 src 合并进 dst：链接树按 URL 递归合并，子分类按名称递归合并。
+// urlIndex 覆盖 dst 整棵子树（含子分类与子链接）并在合并过程中持续登记，
+// 任何一层的新增内容都不会与 dst 现有（含本次刚并入的）链接重复。
+// 已存在的链接不是整体跳过，而是继续向下比对，只把子链接增量并入对应
+// 节点、层级保持不变（不会把子链接摊平到分类顶层）。
+function mergeCategory(src, dst, urlIndex) {
+  const norm = (u) => String(u || "").replace(/\/+$/, "");
+  if (!urlIndex) {
+    urlIndex = new Map();
+    const indexLinks = (links) => links.forEach((l) => {
+      urlIndex.set(norm(l.url), l);
+      if (l.children && l.children.length) indexLinks(l.children);
+    });
+    const indexCat = (c) => { indexLinks(c.links); c.children.forEach(indexCat); };
+    indexCat(dst);
+  }
+  const mergeLinkInto = (srcLink, parentList) => {
+    const hit = urlIndex.get(norm(srcLink.url));
+    if (hit) {
+      // 目标树已有该链接 → 不动本体，向下合并子链接增量
+      for (const child of srcLink.children || []) mergeLinkInto(child, hit.children);
+      return;
     }
+    // 目标树没有 → 复制为本体并登记；子链接递归走同一逻辑（可能部分已存在）
+    const fresh = newLink(srcLink.title, srcLink.url);
+    fresh.collapsed = srcLink.collapsed;
+    parentList.push(fresh);
+    urlIndex.set(norm(fresh.url), fresh);
+    for (const child of srcLink.children || []) mergeLinkInto(child, fresh.children);
   };
-  walkLinks(src.links);
+  for (const l of src.links) mergeLinkInto(l, dst.links);
   for (const child of src.children) {
     const existing = dst.children.find((c) => c.name === child.name);
-    if (existing) mergeCategory(child, existing);
+    if (existing) mergeCategory(child, existing, urlIndex);
     else dst.children.push(child);
   }
   dst.collapsed = false;
@@ -1070,24 +1147,26 @@ function confirmImportCategory(cat) {
       const mode = sameName.length
         ? (body.querySelector('input[name="impMode"]:checked')?.value === "copy" ? "copy" : "merge")
         : "copy";
-      if (mode === "merge") {
-        mergeCategory(cat, sameName[0]);
-      } else {
-        const target = body.querySelector("select[name=impTarget]")?.value || "root";
-        if (target === "root") {
-          state.categories.push(cat);
+      const mergeTargetId = sameName[0]?.id;
+      await commit(() => {
+        if (mode === "merge") {
+          const target = mergeTargetId ? findNode(mergeTargetId)?.node : null;
+          if (target) mergeCategory(cat, target);
         } else {
-          const parent = findNode(target)?.node;
-          if (parent) {
-            parent.children.push(cat);
-            parent.collapsed = false; // 自动展开，让用户看到导入结果
-          } else {
+          const target = body.querySelector("select[name=impTarget]")?.value || "root";
+          if (target === "root") {
             state.categories.push(cat);
+          } else {
+            const parent = findNode(target)?.node;
+            if (parent) {
+              parent.children.push(cat);
+              parent.collapsed = false; // 自动展开，让用户看到导入结果
+            } else {
+              state.categories.push(cat);
+            }
           }
         }
-      }
-      await save();
-      render();
+      });
     }
   });
 }
@@ -1132,55 +1211,64 @@ function importFromBookmarks() {
       const bar = tree[0]?.children?.find((n) => n.id === "1") || tree[0]?.children?.[0];
       if (!bar || !bar.children) return;
 
-      const existing = new Set(state.categories.map((c) => c.name));
-      const keys = collectExistingKeys();
-      let skipped = 0;
-      const skip = (link) => {
-        if (keys.urls.has(link.url) || keys.titles.has(link.title)) { skipped++; return true; }
-        keys.urls.add(link.url);
-        keys.titles.add(link.title);
-        return false;
-      };
       let addedFolders = 0;
+      let mergedFolders = 0;
       let addedLoose = 0;
+      let skipped = 0;
+      await commit(() => {
+        const keys = collectExistingKeys();
+        const skip = (link) => {
+          if (keys.urls.has(link.url) || keys.titles.has(link.title)) { skipped++; return true; }
+          keys.urls.add(link.url);
+          keys.titles.add(link.title);
+          return false;
+        };
 
-      // 1) 文件夹 → 分类树
-      for (const folder of bar.children) {
-        if (folder.url || !folder.children) continue;
-        if (existing.has(folder.title)) continue;
-        const cat = bookmarkFolderToCategory(folder, skip);
-        if (countLinks(cat) === 0) continue;
-        state.categories.push(cat);
-        existing.add(cat.name);
-        addedFolders++;
-      }
-
-      // 2) 散置的单个收藏 → 归入「书签栏（散置链接）」
-      const LOOSE_NAME = "书签栏（散置链接）";
-      const looseLinks = bar.children
-        .filter((n) => n.url)
-        .map((n) => newLink(n.title || hostOf(n.url), n.url))
-        .filter((l) => !skip(l));
-      if (looseLinks.length > 0) {
-        let looseCat = state.categories.find((c) => c.name === LOOSE_NAME);
-        if (!looseCat) {
-          looseCat = newCategory(LOOSE_NAME, state.settings.defaultCollapsed);
-          state.categories.push(looseCat);
+        // 1) 文件夹 → 分类树。与现有分类同名时并入增量而不是整体跳过，
+        //    这样浏览器里后加进该文件夹的书签，再次导入也能被收录
+        for (const folder of bar.children) {
+          if (folder.url || !folder.children) continue;
+          const cat = bookmarkFolderToCategory(folder, skip);
+          if (countLinks(cat) === 0) continue;
+          const dup = state.categories.find((c) => c.name === folder.title);
+          if (dup) {
+            mergeCategory(cat, dup);
+            mergedFolders++;
+          } else {
+            state.categories.push(cat);
+            addedFolders++;
+          }
         }
-        for (const link of looseLinks) {
-          looseCat.links.push(link);
-          addedLoose++;
-        }
-      }
 
-      await save();
-      render();
-      if (addedFolders === 0 && addedLoose === 0) {
+        // 2) 散置的单个收藏 → 归入「书签栏（散置链接）」
+        const LOOSE_NAME = "书签栏（散置链接）";
+        const looseLinks = bar.children
+          .filter((n) => n.url)
+          .map((n) => newLink(n.title || hostOf(n.url), n.url))
+          .filter((l) => !skip(l));
+        if (looseLinks.length > 0) {
+          let looseCat = state.categories.find((c) => c.name === LOOSE_NAME);
+          if (!looseCat) {
+            looseCat = newCategory(LOOSE_NAME, state.settings.defaultCollapsed);
+            state.categories.push(looseCat);
+          }
+          for (const link of looseLinks) {
+            looseCat.links.push(link);
+            addedLoose++;
+          }
+        }
+      });
+
+      if (addedFolders === 0 && mergedFolders === 0 && addedLoose === 0) {
         alert(skipped > 0
           ? `没有可导入的新内容（${skipped} 个链接已存在，已跳过）。`
           : "没有可导入的内容（收藏夹为空）。");
       } else {
-        alert(`导入完成：${addedFolders} 个分类，${addedLoose} 个散置链接` +
+        const parts = [];
+        if (addedFolders) parts.push(`新增 ${addedFolders} 个分类`);
+        if (mergedFolders) parts.push(`并入 ${mergedFolders} 个已有分类`);
+        if (addedLoose) parts.push(`${addedLoose} 个散置链接`);
+        alert("导入完成：" + parts.join("、") +
           (skipped > 0 ? `（跳过 ${skipped} 个已存在的链接）` : "") + "。");
       }
     }
@@ -1274,7 +1362,6 @@ function bindDragEvents() {
 
     clearDropHints();
     dragCtx = null;
-    render();
   });
 
   list.addEventListener("dragend", () => {
@@ -1284,67 +1371,70 @@ function bindDragEvents() {
 }
 
 // 移动分类到目标分类的 前/后/内部
-async function dropCategory(srcId, targetId, zone) {
-  const src = findNode(srcId);
-  const target = findNode(targetId);
-  if (!src || !target) return;
-  if (inSubtree(src.node, targetId)) return; // 防止拖进自己的子树
+function dropCategory(srcId, targetId, zone) {
+  return commit(() => {
+    const src = findNode(srcId);
+    const target = findNode(targetId);
+    if (!src || !target) return;
+    if (inSubtree(src.node, targetId)) return; // 防止拖进自己的子树
 
-  // 先从原位置摘除
-  const i = src.parentList.findIndex((n) => n.id === srcId);
-  src.parentList.splice(i, 1);
+    // 先从原位置摘除
+    const i = src.parentList.findIndex((n) => n.id === srcId);
+    src.parentList.splice(i, 1);
 
-  if (zone === "into") {
-    target.node.children.push(src.node);
-    target.node.collapsed = false;
-  } else {
-    // 摘除后重新定位目标（同一列表时索引可能已变化）
-    const t = findNode(targetId);
-    const j = t.parentList.findIndex((n) => n.id === targetId);
-    t.parentList.splice(zone === "before" ? j : j + 1, 0, src.node);
-  }
-  await save();
+    if (zone === "into") {
+      target.node.children.push(src.node);
+      target.node.collapsed = false;
+    } else {
+      // 摘除后重新定位目标（同一列表时索引可能已变化）
+      const t = findNode(targetId);
+      const j = t.parentList.findIndex((n) => n.id === targetId);
+      t.parentList.splice(zone === "before" ? j : j + 1, 0, src.node);
+    }
+  });
 }
 
 // 链接拖到另一条链接的 前/后/内部（内部 = 成为它的子链接）
-async function dropLinkOnLink(srcId, targetId, zone) {
-  if (srcId === targetId) return;
-  const src = findLink(srcId);
-  if (!src) return;
-  if (inLinkSubtree(src.link, targetId)) return; // 防止拖进自己的子链接树
+function dropLinkOnLink(srcId, targetId, zone) {
+  if (srcId === targetId) return Promise.resolve();
+  return commit(() => {
+    const src = findLink(srcId);
+    if (!src) return;
+    if (inLinkSubtree(src.link, targetId)) return; // 防止拖进自己的子链接树
 
-  const si = src.parentList.findIndex((l) => l.id === srcId);
-  if (si < 0) return;
-  const [link] = src.parentList.splice(si, 1);
+    const si = src.parentList.findIndex((l) => l.id === srcId);
+    if (si < 0) return;
+    const [link] = src.parentList.splice(si, 1);
 
-  if (zone === "into") {
-    const target = findLink(targetId);
-    if (!target) return;
-    target.link.children.push(link);
-    target.link.collapsed = false;
-  } else {
-    // 摘除后重新定位目标
-    const t = findLink(targetId);
-    if (!t) return;
-    const ti = t.parentList.findIndex((l) => l.id === targetId);
-    t.parentList.splice(zone === "before" ? ti : ti + 1, 0, link);
-  }
-  await save();
+    if (zone === "into") {
+      const target = findLink(targetId);
+      if (!target) return;
+      target.link.children.push(link);
+      target.link.collapsed = false;
+    } else {
+      // 摘除后重新定位目标
+      const t = findLink(targetId);
+      if (!t) return;
+      const ti = t.parentList.findIndex((l) => l.id === targetId);
+      t.parentList.splice(zone === "before" ? ti : ti + 1, 0, link);
+    }
+  });
 }
 
 // 链接拖到分类标题 → 移入该分类（成为其顶层链接）
-async function dropLinkOnCategory(srcId, targetCatId) {
-  const src = findLink(srcId);
-  const target = findNode(targetCatId);
-  if (!src || !target) return;
-  if (src.cat && src.cat.id === targetCatId && src.parentList === src.cat.links) return; // 已在该分类顶层
+function dropLinkOnCategory(srcId, targetCatId) {
+  return commit(() => {
+    const src = findLink(srcId);
+    const target = findNode(targetCatId);
+    if (!src || !target) return;
+    if (src.cat && src.cat.id === targetCatId && src.parentList === src.cat.links) return; // 已在该分类顶层
 
-  const si = src.parentList.findIndex((l) => l.id === srcId);
-  if (si < 0) return;
-  const [link] = src.parentList.splice(si, 1);
-  target.node.links.push(link);
-  target.node.collapsed = false;
-  await save();
+    const si = src.parentList.findIndex((l) => l.id === srcId);
+    if (si < 0) return;
+    const [link] = src.parentList.splice(si, 1);
+    target.node.links.push(link);
+    target.node.collapsed = false;
+  });
 }
 
 /* ---------------- 导出 / 恢复 JSON 备份 ---------------- */
@@ -1397,12 +1487,11 @@ function importBackup(file) {
         (data.exportedAt ? `（导出于 ${new Date(data.exportedAt).toLocaleString("zh-CN")}）` : "") +
         `。<br/><b>恢复将覆盖当前所有分类与设置，且不可撤销。</b>建议先导出当前数据。</p>`,
       onOk: async () => {
-        migrate(data.categories); // 兼容旧版本结构
-        state.categories = data.categories;
-        state.settings = { ...DEFAULT_SETTINGS, ...(data.settings || {}) };
-        await save();
-        applySettingsToUI();
-        render();
+        await commit(() => {
+          migrate(data.categories); // 兼容旧版本结构
+          state.categories = data.categories;
+          state.settings = { ...DEFAULT_SETTINGS, ...(data.settings || {}) };
+        });
         alert("恢复完成。");
       }
     });
@@ -1425,10 +1514,14 @@ function bindEvents() {
     const cat = found.node;
 
     switch (action) {
-      case "toggle-cat":
-        cat.collapsed = !cat.collapsed;
-        save().then(render);
+      case "toggle-cat": {
+        const id = cat.id;
+        commit(() => {
+          const f = findNode(id);
+          if (f) f.node.collapsed = !f.node.collapsed;
+        });
         break;
+      }
       case "add-link": addLink(cat); break;
       case "add-subcat": addCategory(cat); break;
       case "rename-cat": renameCategory(cat); break;
@@ -1437,11 +1530,11 @@ function bindEvents() {
       case "cat-bottom": moveCatToEdge(found, "bottom"); break;
       case "cat-export": exportCategory(cat); break;
       case "toggle-link": {
-        const hit = findLink(e.target.closest(".link-row")?.dataset.linkId);
-        if (hit) {
-          hit.link.collapsed = !hit.link.collapsed;
-          save().then(render);
-        }
+        const linkId = e.target.closest(".link-row")?.dataset.linkId;
+        commit(() => {
+          const hit = findLink(linkId);
+          if (hit) hit.link.collapsed = !hit.link.collapsed;
+        });
         break;
       }
       case "add-sublink": {
@@ -1459,9 +1552,13 @@ function bindEvents() {
         if (hit) {
           const subCount = countLinkTree(hit.link) - 1;
           if (subCount > 0 && !confirm(`该链接下还有 ${subCount} 个子链接，将一并删除，确定吗？`)) break;
-          const i = hit.parentList.findIndex((l) => l.id === hit.link.id);
-          if (i >= 0) hit.parentList.splice(i, 1);
-          save().then(render);
+          const id = hit.link.id;
+          commit(() => {
+            const h = findLink(id);
+            if (!h) return;
+            const i = h.parentList.findIndex((l) => l.id === id);
+            if (i >= 0) h.parentList.splice(i, 1);
+          });
         }
         break;
       }
@@ -1500,86 +1597,92 @@ function bindEvents() {
   $("#btnImportFile").onclick = importCategoryFile;
   $("#btnSettings").onclick = () => $("#settingsPanel").classList.toggle("hidden");
   $("#btnExpandAll").onclick = () => {
-    const walk = (list) => list.forEach((c) => { c.collapsed = false; walk(c.children); });
-    walk(state.categories);
-    save().then(render);
+    commit(() => {
+      const walk = (list) => list.forEach((c) => { c.collapsed = false; walk(c.children); });
+      walk(state.categories);
+    });
   };
   $("#btnCollapseAll").onclick = () => {
-    const walk = (list) => list.forEach((c) => { c.collapsed = true; walk(c.children); });
-    walk(state.categories);
-    save().then(render);
+    commit(() => {
+      const walk = (list) => list.forEach((c) => { c.collapsed = true; walk(c.children); });
+      walk(state.categories);
+    });
   };
 
-  // 设置
-  $("#setIndentEnabled").onchange = async (e) => {
-    state.settings.indentEnabled = e.target.checked;
-    await save();
-    applySettingsToUI();
+  // 设置（设置面板的界面回填由 commit 内的 syncSettingsUI 统一处理）
+  $("#setIndentEnabled").onchange = (e) => {
+    const v = e.target.checked;
+    commit(() => { state.settings.indentEnabled = v; });
   };
-  $("#setIndentSize").oninput = async (e) => {
-    state.settings.indentSize = Number(e.target.value);
-    await save();
-    applySettingsToUI();
+  $("#setIndentSize").oninput = (e) => {
+    const v = Number(e.target.value);
+    commit(() => { state.settings.indentSize = v; });
   };
-  $("#setDefaultCollapsed").onchange = async (e) => {
-    state.settings.defaultCollapsed = e.target.checked;
-    await save();
+  $("#setDefaultCollapsed").onchange = (e) => {
+    const v = e.target.checked;
+    commit(() => { state.settings.defaultCollapsed = v; });
   };
-  $("#setOpenInNewTab").onchange = async (e) => {
-    state.settings.openInNewTab = e.target.checked;
-    await save();
-    render();
+  $("#setOpenInNewTab").onchange = (e) => {
+    const v = e.target.checked;
+    commit(() => { state.settings.openInNewTab = v; });
   };
 
   // 面板形态
-  $("#setPanelMode").onchange = async (e) => {
-    state.settings.panelMode = e.target.value;
-    await save();
+  $("#setPanelMode").onchange = (e) => {
+    const v = e.target.value;
+    commit(() => { state.settings.panelMode = v; });
   };
-  $("#setHoverDelay").onchange = async (e) => {
+  $("#setHoverDelay").onchange = (e) => {
     let v = parseFloat(e.target.value);
     if (isNaN(v)) v = 1;
     v = Math.min(120, Math.max(0, v));
     e.target.value = v;
-    state.settings.hoverDelaySec = v;
-    await save();
+    commit(() => { state.settings.hoverDelaySec = v; });
   };
-  $("#setMaxIndentDepth").onchange = async (e) => {
+  $("#setMaxIndentDepth").onchange = (e) => {
     let v = parseInt(e.target.value, 10);
     if (isNaN(v)) v = 4;
     v = Math.min(8, Math.max(1, v));
     e.target.value = v;
-    state.settings.maxIndentDepth = v;
-    await save();
-    render();
+    commit(() => { state.settings.maxIndentDepth = v; });
   };
 
   // AI 设置
-  $("#setAiProvider").onchange = async (e) => {
-    state.settings.aiProvider = e.target.value;
-    await save();
-    applySettingsToUI(); // 刷新默认模型占位提示
+  $("#setAiProvider").onchange = (e) => {
+    const v = e.target.value;
+    commit(() => { state.settings.aiProvider = v; });
   };
-  $("#setAiKey").onchange = async (e) => {
-    state.settings.aiKey = e.target.value.trim();
-    await save();
+  $("#setAiKey").onchange = (e) => {
+    const v = e.target.value.trim();
+    commit(() => { state.settings.aiKey = v; });
   };
-  $("#setAiModel").onchange = async (e) => {
-    state.settings.aiModel = e.target.value.trim();
-    await save();
+  $("#setAiModel").onchange = (e) => {
+    const v = e.target.value.trim();
+    commit(() => { state.settings.aiModel = v; });
   };
-  $("#setAiMaxItems").onchange = async (e) => {
+  $("#setAiMaxItems").onchange = (e) => {
     const v = Math.max(10, Math.min(500, Number(e.target.value) || 250));
-    state.settings.aiMaxItems = v;
     e.target.value = v;
-    await save();
+    commit(() => { state.settings.aiMaxItems = v; });
   };
 }
 
 /* ---------------- 启动 ---------------- */
 (async function init() {
   await loadState();
+  lastSnapshot = snapshotOf();
+  lastSettingsJson = JSON.stringify(state.settings);
   applySettingsToUI();
   render();
   bindEvents();
+
+  // 其他面板写入了数据 → 跟随刷新。排在提交链后面执行，避免与进行中的
+  // 提交互踩；重载后内容没变（本面板自己的写入触发的）就不重绘。
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local" || (!("categories" in changes) && !("settings" in changes))) return;
+    commitChain = commitChain.then(async () => {
+      await loadState();
+      applyRenderIfChanged();
+    });
+  });
 })();
