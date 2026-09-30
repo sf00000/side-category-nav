@@ -238,12 +238,14 @@ function applyRenderIfChanged() {
 // 覆盖）」缩小到「读改写之间的毫秒级」。
 let commitChain = Promise.resolve();
 function commit(mutate) {
-  const run = (async () => {
+  // 必须接到前一次提交之后执行：若异步体立即启动，同一面板的两次提交
+  // 会在存储读写延迟下并发进行，后完成的一次会拿旧数据覆盖前一次的结果
+  const run = commitChain.then(async () => {
     await loadState();
     mutate();
     await save();
     applyRenderIfChanged();
-  })();
+  });
   commitChain = run.catch((err) => console.error("保存变更失败：", err));
   return run;
 }
@@ -1099,8 +1101,15 @@ function mergeCategory(src, dst, urlIndex) {
   for (const l of src.links) mergeLinkInto(l, dst.links);
   for (const child of src.children) {
     const existing = dst.children.find((c) => c.name === child.name);
-    if (existing) mergeCategory(child, existing, urlIndex);
-    else dst.children.push(child);
+    if (existing) {
+      mergeCategory(child, existing, urlIndex);
+    } else {
+      // 新名字的子分类同样先建空分类、再递归并入，让共享 URL 索引继续
+      // 把关——直接整棵 push 会把与目标其他位置重复的 URL 带进来
+      const fresh = newCategory(child.name, child.collapsed);
+      dst.children.push(fresh);
+      mergeCategory(child, fresh, urlIndex);
+    }
   }
   dst.collapsed = false;
 }
@@ -1401,20 +1410,20 @@ function dropLinkOnLink(srcId, targetId, zone) {
     const src = findLink(srcId);
     if (!src) return;
     if (inLinkSubtree(src.link, targetId)) return; // 防止拖进自己的子链接树
+    // 目标可能已被别的面板删除：先确认目标存在，再做任何摘除——
+    // 否则摘除后 return，commit 照样落盘，源链接（含子链接）会被静默删掉
+    const t = findLink(targetId);
+    if (!t) return;
 
     const si = src.parentList.findIndex((l) => l.id === srcId);
     if (si < 0) return;
     const [link] = src.parentList.splice(si, 1);
 
     if (zone === "into") {
-      const target = findLink(targetId);
-      if (!target) return;
-      target.link.children.push(link);
-      target.link.collapsed = false;
+      t.link.children.push(link);
+      t.link.collapsed = false;
     } else {
-      // 摘除后重新定位目标
-      const t = findLink(targetId);
-      if (!t) return;
+      // 摘除后重新定位目标（同一列表时索引可能已变化）
       const ti = t.parentList.findIndex((l) => l.id === targetId);
       t.parentList.splice(zone === "before" ? ti : ti + 1, 0, link);
     }
