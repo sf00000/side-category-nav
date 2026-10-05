@@ -13,6 +13,7 @@
     <div class="toolbar-actions">
       <button id="btnAddPage" class="primary stacked" title="收藏当前正在浏览的页面"><span class="btn-icon">☆</span><span class="btn-text">当前页</span></button>
       <button id="btnAiOrganize" title="AI 自动整理收藏（需在设置中配置 API Key）">✨</button>
+      <button id="btnSync" title="同步最新配置（拉取其他窗口/面板的最新改动）">🔄</button>
       <button id="btnExpandAll" title="全部展开">⤢</button>
       <button id="btnCollapseAll" title="全部折叠">⤡</button>
       <button id="btnImport" title="从浏览器收藏夹导入">⇩</button>
@@ -98,11 +99,11 @@
 
     <h3 style="margin-top:10px">数据备份</h3>
     <div class="setting-row">
-      <button id="btnExport">⬇ 导出 backup.json</button>
-      <button id="btnImportBackup">⬆ 从 backup.json 恢复</button>
-      <input type="file" id="backupFileInput" accept=".json,application/json" class="hidden" />
+      <button id="btnExport">⬇ 导出加密备份</button>
+      <button id="btnImportBackup">⬆ 从备份恢复</button>
+      <input type="file" id="backupFileInput" accept=".scnbak,.json" class="hidden" />
     </div>
-    <p class="note">卸载扩展会清空本地数据，建议定期导出备份。恢复会覆盖当前全部分类与设置。</p>
+    <p class="note">导出的 .scnbak 为加密文件（含全部分类、层级、本地文件与插件配置），非明文、肉眼不可读。卸载扩展会清空本地数据，建议定期导出；恢复会覆盖当前全部分类与设置。旧版明文 backup.json 仍可导入。</p>
   </section>
 
   <!-- 分类列表 -->
@@ -125,6 +126,9 @@
       </div>
     </div>
   </div>
+
+  <!-- 轻量提示（同步等操作反馈） -->
+  <div id="toast" class="toast hidden"></div>
 
   <script src="sidepanel.js"></script>
 </body>

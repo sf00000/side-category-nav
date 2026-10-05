@@ -32,6 +32,23 @@ let searchQuery = ""; // 实时搜索关键字（不持久化）
 /* ---------------- 工具 ---------------- */
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
+// 轻量提示：底部短暂浮现一条消息，不打断操作
+let toastTimer = null;
+function toast(msg) {
+  const el = $("#toast");
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.remove("hidden");
+  // 强制重排后再加 show，保证过渡动画生效
+  void el.offsetWidth;
+  el.classList.add("show");
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    el.classList.remove("show");
+    setTimeout(() => el.classList.add("hidden"), 220);
+  }, 1800);
+}
+
 const escapeHtml = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
@@ -1446,8 +1463,49 @@ function dropLinkOnCategory(srcId, targetCatId) {
   });
 }
 
-/* ---------------- 导出 / 恢复 JSON 备份 ---------------- */
-function exportBackup() {
+/* ---------------- 导出 / 恢复加密备份 ---------------- */
+// 非明文备份：固定密钥 XOR 流 + Base64，带魔术头标识。
+// 不是强加密（密钥在源码里），目的只是「肉眼不可读、不被随手改」；
+// 换设备/重装后用同版本扩展即可解密还原。导入时若无魔术头，按旧明文 JSON
+// 兼容处理，老的 backup.json 仍可恢复。
+const BACKUP_MAGIC = "SCNENC1:";
+const BACKUP_KEY = "side-category-nav::v1::backup-key";
+
+// UTF-8 安全的 Base64 编解码（btoa 只认 Latin1）
+function b64Encode(str) {
+  return btoa(unescape(encodeURIComponent(str)));
+}
+function b64Decode(b64) {
+  return decodeURIComponent(escape(atob(b64)));
+}
+
+// 对称 XOR：加密解密同一函数（按字符码与密钥循环异或）
+function xorCipher(text, key) {
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    out += String.fromCharCode(text.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+  }
+  return out;
+}
+
+function encryptBackup(plain) {
+  // 先 XOR 再 Base64，前面拼魔术头
+  return BACKUP_MAGIC + b64Encode(xorCipher(plain, BACKUP_KEY));
+}
+
+// 返回明文 JSON 字符串；无法识别则抛错
+function decryptBackup(raw) {
+  const text = raw.trim();
+  if (text.startsWith(BACKUP_MAGIC)) {
+    const body = text.slice(BACKUP_MAGIC.length);
+    return xorCipher(b64Decode(body), BACKUP_KEY);
+  }
+  // 向后兼容：旧版明文 JSON 备份
+  if (text.startsWith("{")) return text;
+  throw new Error("无法识别的备份格式");
+}
+
+async function exportBackup() {
   const data = {
     app: "side-category-nav",
     version: 1,
@@ -1455,15 +1513,21 @@ function exportBackup() {
     categories: state.categories,
     settings: state.settings
   };
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
+  // 加密后导出，内容为不可读的密文
+  const payload = encryptBackup(JSON.stringify(data));
   const d = new Date();
   const pad = (n) => String(n).padStart(2, "0");
-  a.href = url;
-  a.download = `side-nav-backup-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
+  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+  const filename = `side-nav-backup-${stamp}.scnbak`;
+  try {
+    const blob = new Blob([payload], { type: "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+    // saveAs: true → 弹出系统「存储为」对话框，可自选保存目录
+    await chrome.downloads.download({ url, filename, saveAs: true });
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (err) {
+    alert("导出失败：" + (err && err.message ? err.message : err));
+  }
 }
 
 function importBackup(file) {
@@ -1471,9 +1535,10 @@ function importBackup(file) {
   reader.onload = () => {
     let data;
     try {
-      data = JSON.parse(reader.result);
+      const json = decryptBackup(reader.result);
+      data = JSON.parse(json);
     } catch {
-      alert("备份文件不是合法的 JSON，恢复失败。");
+      alert("备份文件无法解密或格式不正确，恢复失败。请使用本扩展导出的 .scnbak 文件。");
       return;
     }
     if (!data || !Array.isArray(data.categories)) {
@@ -1605,6 +1670,27 @@ function bindEvents() {
   $("#btnImport").onclick = importFromBookmarks;
   $("#btnImportFile").onclick = importCategoryFile;
   $("#btnSettings").onclick = () => $("#settingsPanel").classList.toggle("hidden");
+
+  // 一键同步：主动拉取存储里的最新配置（其他窗口/面板的改动），有变化就刷新。
+  // 排在提交链末尾执行，避免与进行中的写入互踩。平时各面板已通过
+  // storage.onChanged 自动跟随，这里给的是「立即、可见」的手动确认入口。
+  $("#btnSync").onclick = () => {
+    const btn = $("#btnSync");
+    btn.classList.remove("spinning");
+    void btn.offsetWidth;        // 重启动画
+    btn.classList.add("spinning");
+    const prev = snapshotOf();
+    commitChain = commitChain.then(async () => {
+      await loadState();
+      const changed = snapshotOf() !== prev;
+      applyRenderIfChanged();
+      toast(changed ? "已同步到最新配置" : "已是最新，无需同步");
+    }).catch((err) => {
+      console.error("同步失败：", err);
+      toast("同步失败，请重试");
+    });
+  };
+
   $("#btnExpandAll").onclick = () => {
     commit(() => {
       const walk = (list) => list.forEach((c) => { c.collapsed = false; walk(c.children); });
